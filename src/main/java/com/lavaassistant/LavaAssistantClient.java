@@ -28,9 +28,8 @@ public class LavaAssistantClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null || client.world == null) return;
 
-            // Direct keyboard check for 'R' key (GLFW.GLFW_KEY_R)
             long window = client.getWindow().getHandle();
-            boolean isRPressed = org.lwjgl.glfw.GLFW.glfwGetKey(window, GLFW.GLFW_KEY_R) == GLFW.GLFW_PRESSED;
+            boolean isRPressed = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_R) == GLFW.GLFW_PRESS;
 
             if (isRPressed && !wasPressedLastFrame) {
                 isEnabled = !isEnabled;
