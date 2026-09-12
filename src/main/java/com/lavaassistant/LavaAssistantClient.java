@@ -1,9 +1,8 @@
 package com.lavaassistant;
 
 import net.fabricmc.api.ClientModInitializer;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.entity.Entity;
@@ -28,27 +27,24 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        // Register client-side commands: type /lava to enable, /lavaoff to disable
-        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
-            dispatcher.register(ClientCommandManager.literal("lava")
-                    .executes(context -> {
-                        isEnabled = true;
-                        if (context.getSource().getPlayer() != null) {
-                            context.getSource().getPlayer().sendMessage(Text.literal("§a[LavaAssistant] Enabled!"), false);
-                        }
-                        return 1;
-                    }));
-
-            dispatcher.register(ClientCommandManager.literal("lavaoff")
-                    .executes(context -> {
-                        isEnabled = false;
-                        taskState = 0;
-                        actionDelayTicks = 0;
-                        if (context.getSource().getPlayer() != null) {
-                            context.getSource().getPlayer().sendMessage(Text.literal("§c[LavaAssistant] Disabled!"), false);
-                        }
-                        return 1;
-                    }));
+        // Intercept normal chat messages: typing @lava or @lavaoff triggers the mod toggle locally
+        ClientSendMessageEvents.ALLOW.register(message -> {
+            if (message.equalsIgnoreCase("@lava")) {
+                isEnabled = true;
+                if (MinecraftClient.getInstance().player != null) {
+                    MinecraftClient.getInstance().player.sendMessage(Text.literal("§a[LavaAssistant] Enabled!"), false);
+                }
+                return false; // Cancels sending the message to the server
+            } else if (message.equalsIgnoreCase("@lavaoff")) {
+                isEnabled = false;
+                taskState = 0;
+                actionDelayTicks = 0;
+                if (MinecraftClient.getInstance().player != null) {
+                    MinecraftClient.getInstance().player.sendMessage(Text.literal("§c[LavaAssistant] Disabled!"), false);
+                }
+                return false; // Cancels sending the message to the server
+            }
+            return true;
         });
 
         // Main execution loop hooked into client ticks
