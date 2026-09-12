@@ -40,7 +40,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 "key.lavaassistant.toggle",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_R,
-                "category.minecraft.gameplay"
+                new KeyBinding.Category("key.categories.gameplay")
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
