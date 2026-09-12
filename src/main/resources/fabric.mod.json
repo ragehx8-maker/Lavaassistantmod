@@ -3,18 +3,16 @@
   "id": "lavaassistant",
   "version": "1.0.0",
   "name": "Lava Assistant",
-  "description": "Automatically mixes and places lava when enemies are close.",
-  "authors": ["You"],
-  "contact": {},
-  "license": "MIT",
+  "description": "Smart PvP utility mod with client commands",
   "environment": "client",
   "entrypoints": {
-    "client": ["com.lavaassistant.LavaAssistantClient"]
+    "client": [
+      "com.lavaassistant.LavaAssistantClient"
+    ]
   },
   "depends": {
-    "fabricloader": ">=0.16.0",
-    "minecraft": "~1.21.11",
-    "java": ">=21",
+    "fabricloader": "*",
+    "minecraft": "1.21.11",
     "fabric-api": "*"
   }
 }
