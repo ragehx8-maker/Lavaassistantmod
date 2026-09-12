@@ -2,11 +2,8 @@ package com.lavaassistant;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.mob.HostileEntity;
@@ -21,24 +18,21 @@ import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
 public class LavaAssistantClient implements ClientModInitializer {
-    private static KeyBinding toggleKeyBinding;
     private static boolean isEnabled = false;
+    private static boolean wasPressedLastFrame = false;
     private int cooldownTicks = 0;
     private int taskState = 0;
 
     @Override
     public void onInitializeClient() {
-        toggleKeyBinding = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-                "key.lavaassistant.toggle",
-                InputUtil.Type.KEYSYM,
-                GLFW.GLFW_KEY_R,
-                "category.lavaassistant.general"
-        ));
-
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null || client.world == null) return;
 
-            while (toggleKeyBinding.wasPressed()) {
+            // Direct keyboard check for 'R' key (GLFW.GLFW_KEY_R)
+            long window = client.getWindow().getHandle();
+            boolean isRPressed = org.lwjgl.glfw.GLFW.glfwGetKey(window, GLFW.GLFW_KEY_R) == GLFW.GLFW_PRESSED;
+
+            if (isRPressed && !wasPressedLastFrame) {
                 isEnabled = !isEnabled;
                 if (isEnabled) {
                     client.player.sendMessage(Text.literal("§a[LavaAssistant] Enabled").styled(style -> style.withColor(net.minecraft.util.Formatting.GREEN)), true);
@@ -46,6 +40,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                     client.player.sendMessage(Text.literal("§cLavaAssistant Disabled").styled(style -> style.withColor(net.minecraft.util.Formatting.RED)), true);
                 }
             }
+            wasPressedLastFrame = isRPressed;
 
             if (!isEnabled) {
                 taskState = 0;
