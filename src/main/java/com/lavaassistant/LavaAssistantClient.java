@@ -38,8 +38,8 @@ public class LavaAssistantClient implements ClientModInitializer {
     public void onInitializeClient() {
         toggleKeyBinding = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.lavaassistant.toggle",
-                InputUtil.Type.KEYSYM,
-                GLFW.GLFW_KEY_R
+                GLFW.GLFW_KEY_R,
+                "category.lavaassistant.general"
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
