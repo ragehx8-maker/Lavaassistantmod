@@ -2,11 +2,8 @@ package com.lavaassistant;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.mob.HostileEntity;
@@ -20,70 +17,68 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
+import java.util.Random;
+
 public class LavaAssistantClient implements ClientModInitializer {
-    private static KeyBinding toggleKeyBinding;
     private static boolean isEnabled = false;
-    private int cooldownTicks = 0;
-    private int taskState = 0;
-    private boolean hasWelcomed = false;
+    private static boolean wasPressedLastFrame = false;
+    private int actionDelayTicks = 0;
+    private int taskState = 0; // 0 = Idle / Ready to place, 1 = Placed Lava, waiting to scoop
+    private final Random random = new Random();
 
     @Override
     public void onInitializeClient() {
-        toggleKeyBinding = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-                "key.lavaassistant.toggle",
-                InputUtil.Type.KEYSYM,
-                GLFW.GLFW_KEY_R,
-                "category.lavaassistant.general"
-        ));
-
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            if (client.player == null || client.world == null) {
-                hasWelcomed = false;
-                return;
-            }
+            if (client.player == null || client.world == null) return;
 
-            if (!hasWelcomed) {
-                client.player.sendMessage(Text.literal("§b[LavaAssistant] Mod loaded successfully!"), false);
-                hasWelcomed = true;
-            }
+            long window = client.getWindow().getHandle();
+            boolean isRPressed = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_R) == GLFW.GLFW_PRESS;
 
-            while (toggleKeyBinding.wasPressed()) {
+            // Toggle logic with 'R' key
+            if (isRPressed && !wasPressedLastFrame) {
                 isEnabled = !isEnabled;
                 if (isEnabled) {
-                    client.player.sendMessage(Text.literal("§a[LavaAssistant] Enabled").styled(style -> style.withColor(net.minecraft.util.Formatting.GREEN)), true);
+                    client.player.sendMessage(Text.literal("§a[LavaAssistant] Enabled"), true);
                 } else {
-                    client.player.sendMessage(Text.literal("§cLavaAssistant Disabled").styled(style -> style.withColor(net.minecraft.util.Formatting.RED)), true);
+                    client.player.sendMessage(Text.literal("§cLavaAssistant Disabled"), true);
+                    taskState = 0;
+                    actionDelayTicks = 0;
                 }
             }
+            wasPressedLastFrame = isRPressed;
 
             if (!isEnabled) {
-                taskState = 0;
                 return;
             }
 
-            if (cooldownTicks > 0) {
-                cooldownTicks--;
+            // Handle anti-cheat safe tick delays
+            if (actionDelayTicks > 0) {
+                actionDelayTicks--;
                 return;
             }
 
-            runAssistantLogic(client);
+            runAntiCheatSafeLogic(client);
         });
     }
 
-    private void runAssistantLogic(MinecraftClient client) {
+    private void runAntiCheatSafeLogic(MinecraftClient client) {
         ClientPlayerEntity player = client.player;
-        if (player == null) return;
+        if (player == null || client.interactionManager == null) return;
 
+        // State 1: Scoop the lava back up with an empty bucket after a human-like delay
         if (taskState == 1) {
-            selectItem(player, Items.BUCKET);
-            if (client.interactionManager != null) {
+            int emptyBucketSlot = findItemInHotbar(player, Items.BUCKET);
+            if (emptyBucketSlot != -1) {
+                player.getInventory().selectedSlot = emptyBucketSlot;
                 client.interactionManager.interactItem(player, Hand.MAIN_HAND);
             }
             taskState = 0;
-            cooldownTicks = 10;
+            // Randomized delay (4-7 ticks) to mimic human reaction and avoid anti-cheat flags
+            actionDelayTicks = 4 + random.nextInt(4);
             return;
         }
 
+        // State 0: Scan for target player/hostile entity and place lava at their feet
         Entity target = null;
         double minDistance = 5.0;
 
@@ -94,7 +89,8 @@ public class LavaAssistantClient implements ClientModInitializer {
                 if (dist <= minDistance) {
                     Vec3d lookDir = player.getRotationVector();
                     Vec3d toEntity = entity.getPos().subtract(player.getPos()).normalize();
-                    if (lookDir.dotProduct(toEntity) > 0.3) {
+                    // Crosshair view direction alignment check
+                    if (lookDir.dotProduct(toEntity) > 0.35) {
                         target = entity;
                         minDistance = dist;
                     }
@@ -107,15 +103,17 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (lavaSlot != -1) {
                 player.getInventory().selectedSlot = lavaSlot;
                 BlockPos targetPos = target.getBlockPos();
-                if (client.interactionManager != null) {
-                    client.interactionManager.interactBlock(
-                            player,
-                            Hand.MAIN_HAND,
-                            new BlockHitResult(new Vec3d(targetPos.getX(), targetPos.getY(), targetPos.getZ()), Direction.UP, targetPos, false)
-                    );
-                    taskState = 1;
-                    cooldownTicks = 8;
-                }
+                
+                // Place lava at the target's exact feet position
+                client.interactionManager.interactBlock(
+                        player,
+                        Hand.MAIN_HAND,
+                        new BlockHitResult(new Vec3d(targetPos.getX(), targetPos.getY(), targetPos.getZ()), Direction.UP, targetPos, false)
+                );
+                
+                taskState = 1;
+                // Randomized delay before scooping back up to prevent instant-packet detection
+                actionDelayTicks = 5 + random.nextInt(3);
             }
         }
     }
@@ -127,12 +125,5 @@ public class LavaAssistantClient implements ClientModInitializer {
             }
         }
         return -1;
-    }
-
-    private void selectItem(PlayerEntity player, net.minecraft.item.Item item) {
-        int slot = findItemInHotbar(player, item);
-        if (slot != -1) {
-            player.getInventory().selectedSlot = slot;
-        }
     }
 }
