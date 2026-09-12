@@ -40,7 +40,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 "key.lavaassistant.toggle",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_R,
-                (String) null
+                "category.minecraft.gameplay"
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
@@ -175,4 +175,4 @@ public class LavaAssistantClient implements ClientModInitializer {
         }
         return -1;
     }
-            }
+}
