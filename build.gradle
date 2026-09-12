@@ -44,11 +44,8 @@ java {
 }
 
 jar {
-    def projectName = project.name
-    inputs.property "projectName", projectName
-
     from("LICENSE") {
-        rename "${it}_${projectName}"
+        rename { String fileName -> "${fileName}_${project.name}" }
     }
 }
 
