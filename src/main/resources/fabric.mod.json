@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "lavaassistant",
+  "version": "1.0.0",
+  "name": "Lava Assistant",
+  "description": "Automatically mixes and places lava when enemies are close.",
+  "authors": ["You"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.lavaassistant.LavaAssistantClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
