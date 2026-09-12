@@ -1,9 +1,14 @@
 {
   "schema_version": 1,
   "id": "lavaassistant",
-  "version": "1.0.0",
+  "version": "${version}",
   "name": "Lava Assistant",
-  "description": "Smart PvP utility mod with client commands",
+  "description": "Automatically places and collects lava near enemies.",
+  "authors": [
+    "ragehx8-maker"
+  ],
+  "contact": {},
+  "license": "MIT",
   "environment": "client",
   "entrypoints": {
     "client": [
@@ -11,8 +16,9 @@
     ]
   },
   "depends": {
-    "fabricloader": "*",
+    "fabricloader": ">=0.18.4",
     "minecraft": "1.21.11",
+    "java": ">=21",
     "fabric-api": "*"
   }
 }
