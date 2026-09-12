@@ -19,7 +19,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Generate Gradle Wrapper
-        run: gradle wrapper
+        run: gradle wrapper --gradle-version 8.8
 
       - name: Build with Gradle
         run: ./gradlew build
