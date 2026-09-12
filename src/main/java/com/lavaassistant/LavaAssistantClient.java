@@ -4,6 +4,7 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.Entity;
@@ -57,7 +58,8 @@ public class LavaAssistantClient implements ClientModInitializer {
     }
 
     private void runAssistantLogic(MinecraftClient client) {
-        PlayerEntity player = client.player;
+        ClientPlayerEntity player = client.player;
+        if (player == null) return;
 
         if (taskState == 1) {
             selectItem(player, Items.BUCKET);
@@ -74,7 +76,6 @@ public class LavaAssistantClient implements ClientModInitializer {
 
         for (Entity entity : client.world.getEntities()) {
             if (entity == player) continue;
-            // Fixed: Replaced non-existent isMobOrMonster() with HostileEntity check
             if (entity instanceof LivingEntity && (entity instanceof HostileEntity || entity instanceof PlayerEntity)) {
                 double dist = player.distanceTo(entity);
                 if (dist <= minDistance) {
