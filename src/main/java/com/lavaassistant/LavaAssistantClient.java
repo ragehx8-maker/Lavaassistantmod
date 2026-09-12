@@ -12,7 +12,6 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Items;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
@@ -35,35 +34,23 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        KeyBinding.Category lavaAssistantCategory =
-                KeyBinding.Category.create(
-                        Identifier.of("lavaassistant", "general")
-                );
-
-        toggleKeyBinding = KeyBindingHelper.registerKeyBinding(
-                new KeyBinding(
-                        "key.lavaassistant.toggle",
-                        InputUtil.Type.KEYSYM,
-                        GLFW.GLFW_KEY_R,
-                        lavaAssistantCategory
-                )
-        );
+        toggleKeyBinding = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.lavaassistant.toggle",
+                InputUtil.Type.KEYSYM,
+                GLFW.GLFW_KEY_R,
+                "category.lavaassistant.general"
+        ));
 
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
     }
 
     private void onClientTick(MinecraftClient client) {
-        if (client.player == null || client.world == null) {
-            return;
-        }
+        if (client.player == null || client.world == null) return;
 
         while (toggleKeyBinding.wasPressed()) {
             isEnabled = !isEnabled;
-
             client.player.sendMessage(
-                    Text.literal(
-                            "LavaAssistant: " + (isEnabled ? "ON" : "OFF")
-                    ),
+                    Text.literal("LavaAssistant: " + (isEnabled ? "ON" : "OFF")),
                     true
             );
         }
@@ -83,69 +70,43 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     private void runAssistantLogic(MinecraftClient client) {
         ClientPlayerEntity player = client.player;
+        if (player == null || client.interactionManager == null) return;
 
-        if (player == null || client.interactionManager == null) {
-            return;
-        }
-
-        /*
-         * Task state 1 means lava was already placed.
-         * Try to collect the lava back into the bucket.
-         */
         if (taskState == 1) {
             if (usedSlot != -1 && usedPos != null) {
-                player.getInventory().selectedSlot = usedSlot;
-
+                setHotbarSlot(player, usedSlot);
                 client.interactionManager.interactBlock(
                         player,
                         Hand.MAIN_HAND,
                         new BlockHitResult(
-                                new Vec3d(
-                                        usedPos.getX() + 0.5,
-                                        usedPos.getY() + 0.9,
-                                        usedPos.getZ() + 0.5
-                                ),
+                                new Vec3d(usedPos.getX() + 0.5, usedPos.getY() + 0.9, usedPos.getZ() + 0.5),
                                 Direction.UP,
                                 usedPos,
                                 false
                         )
                 );
             }
-
             resetState();
             cooldownTicks = SCOOP_COOLDOWN_TICKS;
             return;
         }
 
         PlayerEntity target = findNearestPlayer(client, player);
-
-        if (target == null) {
-            return;
-        }
+        if (target == null) return;
 
         int lavaSlot = findItemInHotbar(player, Items.LAVA_BUCKET);
+        if (lavaSlot == -1) return;
 
-        if (lavaSlot == -1) {
-            return;
-        }
-
-        player.getInventory().selectedSlot = lavaSlot;
+        setHotbarSlot(player, lavaSlot);
 
         BlockPos feetPos = target.getBlockPos();
         BlockPos groundPos = feetPos.down();
 
-        /*
-         * Place lava on the block below the target's feet.
-         */
         client.interactionManager.interactBlock(
                 player,
                 Hand.MAIN_HAND,
                 new BlockHitResult(
-                        new Vec3d(
-                                groundPos.getX() + 0.5,
-                                groundPos.getY() + 1.0,
-                                groundPos.getZ() + 0.5
-                        ),
+                        new Vec3d(groundPos.getX() + 0.5, groundPos.getY() + 1.0, groundPos.getZ() + 0.5),
                         Direction.UP,
                         groundPos,
                         false
@@ -164,43 +125,28 @@ public class LavaAssistantClient implements ClientModInitializer {
         usedPos = null;
     }
 
-    private PlayerEntity findNearestPlayer(
-            MinecraftClient client,
-            ClientPlayerEntity player
-    ) {
+    private void setHotbarSlot(ClientPlayerEntity player, int slot) {
+        player.getInventory().selectedSlot = slot;
+        if (player.networkHandler != null) {
+            player.networkHandler.sendPacket(new net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket(slot));
+        }
+    }
+
+    private PlayerEntity findNearestPlayer(MinecraftClient client, ClientPlayerEntity player) {
         PlayerEntity closest = null;
         double closestDistance = TARGET_RANGE;
 
         for (Entity entity : client.world.getEntities()) {
-            if (entity == player) {
-                continue;
-            }
-
-            if (!(entity instanceof PlayerEntity livingTarget)) {
-                continue;
-            }
-
-            if (!livingTarget.isAlive() || livingTarget.isSpectator()) {
-                continue;
-            }
+            if (entity == player) continue;
+            if (!(entity instanceof PlayerEntity livingTarget)) continue;
+            if (!livingTarget.isAlive() || livingTarget.isSpectator()) continue;
 
             double distance = player.distanceTo(livingTarget);
-
-            if (distance > closestDistance) {
-                continue;
-            }
+            if (distance > closestDistance) continue;
 
             Vec3d lookDirection = player.getRotationVector();
-
-            Vec3d towardsEntity = livingTarget
-                    .getPos()
-                    .subtract(player.getPos())
-                    .normalize();
-
-            if (lookDirection.dotProduct(towardsEntity)
-                    <= AIM_DOT_THRESHOLD) {
-                continue;
-            }
+            Vec3d towardsEntity = livingTarget.getPos().subtract(player.getPos()).normalize();
+            if (lookDirection.dotProduct(towardsEntity) <= AIM_DOT_THRESHOLD) continue;
 
             closest = livingTarget;
             closestDistance = distance;
@@ -209,16 +155,12 @@ public class LavaAssistantClient implements ClientModInitializer {
         return closest;
     }
 
-    private int findItemInHotbar(
-            ClientPlayerEntity player,
-            net.minecraft.item.Item item
-    ) {
+    private int findItemInHotbar(ClientPlayerEntity player, net.minecraft.item.Item item) {
         for (int i = 0; i < 9; i++) {
             if (player.getInventory().getStack(i).isOf(item)) {
                 return i;
             }
         }
-
         return -1;
     }
 }
