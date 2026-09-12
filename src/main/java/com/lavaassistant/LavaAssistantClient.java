@@ -31,7 +31,7 @@ public class LavaAssistantClient implements ClientModInitializer {
         toggleKeyBinding = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.lavaassistant.toggle",
                 InputUtil.Type.KEYSYM,
-                GLFW.GLFW_KEY_RIGHT_SHIFT,
+                GLFW.GLFW_KEY_R,
                 "category.lavaassistant.general"
         ));
 
@@ -40,7 +40,11 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             while (toggleKeyBinding.wasPressed()) {
                 isEnabled = !isEnabled;
-                client.player.sendMessage(Text.literal("§6[LavaAssistant] §eToggle: " + (isEnabled ? "§aON" : "§cOFF")), true);
+                if (isEnabled) {
+                    client.player.sendMessage(Text.literal("§a[LavaAssistant] Enabled").styled(style -> style.withColor(net.minecraft.util.Formatting.GREEN)), true);
+                } else {
+                    client.player.sendMessage(Text.literal("§cLavaAssistant Disabled").styled(style -> style.withColor(net.minecraft.util.Formatting.RED)), true);
+                }
             }
 
             if (!isEnabled) {
