@@ -4,6 +4,7 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.Entity;
@@ -23,11 +24,11 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     private static final double TARGET_RANGE = 5.0;
     private static final double AIM_DOT_THRESHOLD = 0.3;
-    private static final int PLACE_COOLDOWN_TICKS = 4; // Thoda fast placement delay
-    private static final int SCOOP_COOLDOWN_TICKS = 1;  // Ekdam instant pickup delay (1 tick)
+    private static final int PLACE_COOLDOWN_TICKS = 4;
+    private static final int SCOOP_COOLDOWN_TICKS = 1;
 
     private int cooldownTicks = 0;
-    private int taskState = 0; // 0 = looking for a player, 1 = need to scoop lava back up
+    private int taskState = 0;
     private int usedSlot = -1;
     private BlockPos usedPos = null;
 
@@ -68,10 +69,9 @@ public class LavaAssistantClient implements ClientModInitializer {
     }
 
     private void runAssistantLogic(MinecraftClient client) {
-        PlayerEntity player = client.player;
+        ClientPlayerEntity player = client.player;
         if (player == null || client.interactionManager == null) return;
 
-        // Step 2: Instant scoop right after placement
         if (taskState == 1) {
             if (usedSlot != -1 && usedPos != null) {
                 player.getInventory().selectedSlot = usedSlot;
@@ -91,7 +91,6 @@ public class LavaAssistantClient implements ClientModInitializer {
             return;
         }
 
-        // Step 1: Find player and place lava
         PlayerEntity target = findNearestPlayer(client, player);
         if (target == null) return;
 
@@ -126,7 +125,7 @@ public class LavaAssistantClient implements ClientModInitializer {
         usedPos = null;
     }
 
-    private PlayerEntity findNearestPlayer(MinecraftClient client, PlayerEntity player) {
+    private PlayerEntity findNearestPlayer(MinecraftClient client, ClientPlayerEntity player) {
         PlayerEntity closest = null;
         double closestDistance = TARGET_RANGE;
 
@@ -149,7 +148,7 @@ public class LavaAssistantClient implements ClientModInitializer {
         return closest;
     }
 
-    private int findItemInHotbar(PlayerEntity player, net.minecraft.item.Item item) {
+    private int findItemInHotbar(ClientPlayerEntity player, net.minecraft.item.Item item) {
         for (int i = 0; i < 9; i++) {
             if (player.getInventory().getStack(i).isOf(item)) {
                 return i;
