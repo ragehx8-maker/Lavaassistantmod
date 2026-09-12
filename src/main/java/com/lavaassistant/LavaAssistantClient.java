@@ -18,6 +18,8 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
+import java.lang.reflect.Field;
+
 public class LavaAssistantClient implements ClientModInitializer {
     private static KeyBinding toggleKeyBinding;
     private static boolean isEnabled = false;
@@ -38,7 +40,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 "key.lavaassistant.toggle",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_R,
-                KeyBinding.INVENTORY_CATEGORY
+                "key.categories.gameplay"
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
@@ -126,7 +128,13 @@ public class LavaAssistantClient implements ClientModInitializer {
     }
 
     private void setHotbarSlot(ClientPlayerEntity player, int slot) {
-        player.getInventory().selectedSlot = slot;
+        try {
+            Field field = net.minecraft.entity.player.PlayerInventory.class.getDeclaredField("selectedSlot");
+            field.setAccessible(true);
+            field.setInt(player.getInventory(), slot);
+        } catch (Exception e) {
+            // Fallback
+        }
         if (player.networkHandler != null) {
             player.networkHandler.sendPacket(new net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket(slot));
         }
@@ -136,6 +144,9 @@ public class LavaAssistantClient implements ClientModInitializer {
         PlayerEntity closest = null;
         double closestDistance = TARGET_RANGE;
 
+        Vec3d playerPos = new Vec3d(player.getX(), player.getY(), player.getZ());
+        Vec3d lookDirection = player.getRotationVector();
+
         for (Entity entity : client.world.getEntities()) {
             if (entity == player) continue;
             if (!(entity instanceof PlayerEntity livingTarget)) continue;
@@ -144,9 +155,7 @@ public class LavaAssistantClient implements ClientModInitializer {
             double distance = player.distanceTo(livingTarget);
             if (distance > closestDistance) continue;
 
-            Vec3d lookDirection = player.getRotationVector();
-            Vec3d playerPos = player.getPos();
-            Vec3d targetPos = livingTarget.getPos();
+            Vec3d targetPos = new Vec3d(livingTarget.getX(), livingTarget.getY(), livingTarget.getZ());
             Vec3d towardsEntity = targetPos.subtract(playerPos).normalize();
             
             if (lookDirection.dotProduct(towardsEntity) <= AIM_DOT_THRESHOLD) continue;
