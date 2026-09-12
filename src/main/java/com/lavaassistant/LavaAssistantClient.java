@@ -40,7 +40,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 "key.lavaassistant.toggle",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_R,
-                "key.categories.gameplay"
+                "category.lavaassistant.general"
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
