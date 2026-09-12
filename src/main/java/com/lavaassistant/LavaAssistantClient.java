@@ -38,7 +38,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 "key.lavaassistant.toggle",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_R,
-                "category.lavaassistant.general"
+                KeyBinding.INVENTORY_CATEGORY
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
@@ -145,7 +145,10 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (distance > closestDistance) continue;
 
             Vec3d lookDirection = player.getRotationVector();
-            Vec3d towardsEntity = livingTarget.getPos().subtract(player.getPos()).normalize();
+            Vec3d playerPos = player.getPos();
+            Vec3d targetPos = livingTarget.getPos();
+            Vec3d towardsEntity = targetPos.subtract(playerPos).normalize();
+            
             if (lookDirection.dotProduct(towardsEntity) <= AIM_DOT_THRESHOLD) continue;
 
             closest = livingTarget;
