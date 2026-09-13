@@ -1,15 +1,12 @@
 {
   "schemaVersion": 1,
   "id": "lavaassistant",
-  "version": "1.0.0",
+  "version": "${version}",
   "name": "Lava Assistant",
   "description": "Toggle test mod",
   "authors": [
     "Ryusei Yamamoto"
   ],
-  "contact": {
-    "sources": "https://github.com/ragehx8-maker/Lavaassistantmod"
-  },
   "license": "MIT",
   "environment": "client",
   "entrypoints": {
