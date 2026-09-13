@@ -14,7 +14,6 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
@@ -27,9 +26,9 @@ public class LavaAssistantClient implements ClientModInitializer {
     private static final long POPUP_DURATION_MS = 1500;
 
     private static KeyBinding toggleKey;
-    private int actionTicks = 0;
-    private int stage = 0; // 0: Ready, 1: Placed, waiting to scoop
-    private BlockPos targetPos = null;
+    private int taskTimer = 0;
+    private int stage = 0; // 0: Ready to place, 1: Waiting to scoop back
+    private BlockPos placedPos = null;
 
     @Override
     public void onInitializeClient() {
@@ -47,37 +46,36 @@ public class LavaAssistantClient implements ClientModInitializer {
                 toggleState = !toggleState;
                 popupShowUntil = System.currentTimeMillis() + POPUP_DURATION_MS;
                 stage = 0;
-                actionTicks = 0;
-                targetPos = null;
+                taskTimer = 0;
+                placedPos = null;
             }
 
             if (!toggleState) return;
 
-            // Timer management for placing & fast scooping
-            if (actionTicks > 0) {
-                actionTicks--;
-
-                // Stage 1: Scoop the lava back up using the empty bucket quickly
-                if (stage == 1 && actionTicks == 0 && targetPos != null) {
+            // Handle fast pickup timer
+            if (taskTimer > 0) {
+                taskTimer--;
+                if (stage == 1 && taskTimer == 0 && placedPos != null) {
+                    // Jab lava place ho jata hai, bucket automatically empty bucket ban jati hai hand me
                     if (client.player.getMainHandStack().isOf(Items.BUCKET) && client.interactionManager != null) {
-                        Vec3d hitVec = new Vec3d(targetPos.getX() + 0.5, targetPos.getY() + 1.0, targetPos.getZ() + 0.5);
-                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, targetPos, false);
+                        Vec3d hitVec = new Vec3d(placedPos.getX() + 0.5, placedPos.getY() + 1.0, placedPos.getZ() + 0.5);
+                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, placedPos, false);
                         client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
                     }
                     stage = 0;
-                    targetPos = null;
+                    placedPos = null;
                 }
                 return;
             }
 
-            // Only run if player is manually holding a Lava Bucket
+            // Sirf tabhi chale jab tu manually haath me Lava Bucket pakde ho
             if (!client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
                 return;
             }
 
-            // Find closest enemy within 4 blocks range
+            // Aas-paas ke enemy player ko detect karna (4 blocks range)
             PlayerEntity target = null;
-            double minDistSq = 16.0; // 4 blocks squared
+            double minDistSq = 16.0;
 
             for (PlayerEntity player : client.world.getPlayers()) {
                 if (player == client.player) continue;
@@ -89,13 +87,12 @@ public class LavaAssistantClient implements ClientModInitializer {
             }
 
             if (target != null && stage == 0 && client.interactionManager != null) {
-                // Precise target block under enemy's feet
-                targetPos = target.getBlockPos().down();
+                placedPos = target.getBlockPos().down(); // Enemy ke bilkul pairon ke niche ka block
 
-                // Look packet to ensure server registers the placement accurately at target position
-                double dx = targetPos.getX() + 0.5 - client.player.getX();
-                double dy = (targetPos.getY() + 0.5) - client.player.getEyeY();
-                double dz = targetPos.getZ() + 0.5 - client.player.getZ();
+                // Accurate rotation packet taaki exact enemy ke pairon par lava view-angle match kare
+                double dx = placedPos.getX() + 0.5 - client.player.getX();
+                double dy = (placedPos.getY() + 0.5) - client.player.getEyeY();
+                double dz = placedPos.getZ() + 0.5 - client.player.getZ();
                 double distXZ = Math.sqrt(dx * dx + dz * dz);
 
                 float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
@@ -106,17 +103,15 @@ public class LavaAssistantClient implements ClientModInitializer {
                         targetYaw, targetPitch, client.player.isOnGround()
                 ));
 
-                // Instant placement using interactItem / block raycast match
-                Vec3d hitVec = new Vec3d(targetPos.getX() + 0.5, targetPos.getY() + 1.0, targetPos.getZ() + 0.5);
-                BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, targetPos, false);
-                client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
+                // Precise lava placement
+                client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
 
                 stage = 1;
-                actionTicks = 10; // Fast pickup delay (10 ticks / ~0.5 seconds) so it scoops right back without getting stuck
+                taskTimer = 10; // Fast pickup delay (~0.5 seconds ke andar turant wapas utha lega)
             }
         });
 
-        // Untouched original ON/OFF HUD pop-up
+        // Tera original ON/OFF HUD Pop-up rendering logic (Bilkul untouched)
         HudRenderCallback.EVENT.register((drawContext, tickDelta) -> {
             if (System.currentTimeMillis() < popupShowUntil) {
                 MinecraftClient client = MinecraftClient.getInstance();
