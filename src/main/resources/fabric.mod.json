@@ -1,5 +1,26 @@
-"entrypoints": {
-  "client": [
-    "com.lavaassistant.LavaAssistantClient"
-  ]
+{
+  "schemaVersion": 1,
+  "id": "lavaassistant",
+  "version": "1.0.0",
+  "name": "Lava Assistant",
+  "description": "Toggle test mod",
+  "authors": [
+    "Ryusei Yamamoto"
+  ],
+  "contact": {
+    "sources": "https://github.com/ragehx8-maker/Lavaassistantmod"
+  },
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.lavaassistant.LavaAssistantClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.15",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
 }
