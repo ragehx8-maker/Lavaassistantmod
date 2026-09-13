@@ -3,19 +3,19 @@
   "id": "lavaassistant",
   "version": "${version}",
   "name": "Lava Assistant",
-  "description": "Toggle test mod",
-  "authors": [
-    "Ryusei Yamamoto"
-  ],
+  "description": "R dabao aur screen par ON/OFF popup dekho",
+  "authors": ["You"],
+  "contact": {},
   "license": "MIT",
   "environment": "client",
   "entrypoints": {
     "client": [
-      "com.lavaassistant.LavaAssistantClient"
+      "com.example.lavaassistant.LavaAssistantClient"
     ]
   },
+  "mixins": [],
   "depends": {
-    "fabricloader": ">=0.15",
+    "fabricloader": ">=0.16.9",
     "minecraft": "~1.21.1",
     "java": ">=21",
     "fabric-api": "*"
