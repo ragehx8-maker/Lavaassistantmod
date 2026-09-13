@@ -26,10 +26,10 @@ public class LavaAssistantClient implements ClientModInitializer {
     private static final long POPUP_DURATION_MS = 1500;
 
     private static KeyBinding toggleKey;
-    private int taskTimer = 0;
-    private int postActionCooldown = 0;
-    private int stage = 0;
-    private BlockPos placedPos = null;
+    private int actionTicks = 0;
+    private int cooldownTicks = 0;
+    private int currentState = 0; // 0: Idle, 1: Placed (Pending Scoop)
+    private BlockPos activePos = null;
 
     @Override
     public void onInitializeClient() {
@@ -46,99 +46,95 @@ public class LavaAssistantClient implements ClientModInitializer {
             while (toggleKey.wasPressed()) {
                 toggleState = !toggleState;
                 popupShowUntil = System.currentTimeMillis() + POPUP_DURATION_MS;
-                stage = 0;
-                taskTimer = 0;
-                postActionCooldown = 0;
-                placedPos = null;
+                currentState = 0;
+                actionTicks = 0;
+                cooldownTicks = 0;
+                activePos = null;
             }
 
             if (!toggleState) return;
 
-            if (postActionCooldown > 0) {
-                postActionCooldown--;
+            // Global cooldown management
+            if (cooldownTicks > 0) {
+                cooldownTicks--;
                 return;
             }
 
-            // Pickup & Scoop Timer Handler
-            if (taskTimer > 0) {
-                taskTimer--;
-                if (taskTimer == 0 && placedPos != null && client.interactionManager != null) {
+            // High-Level Smart Manual / Auto Pickup Detector:
+            // Chaise mod ne dala ho ya tune khud manually dala ho, agar haath me empty bucket hai aur lava block mojood hai, toh utha lo!
+            if (currentState == 0 && client.player.getMainHandStack().isOf(Items.BUCKET)) {
+                BlockPos floorPos = client.player.getBlockPos().down();
+                if (client.world.getBlockState(floorPos).isOf(net.minecraft.block.Blocks.LAVA)) {
+                    activePos = floorPos;
+                    currentState = 1;
+                    actionTicks = 6; // Ultra-fast optimized pickup delay (~0.3s)
+                }
+            }
+
+            // Active Task Handler (Scooping back the lava)
+            if (actionTicks > 0) {
+                actionTicks--;
+                if (actionTicks == 0 && currentState == 1 && activePos != null && client.interactionManager != null) {
                     if (client.player.getMainHandStack().isOf(Items.BUCKET)) {
-                        double dx = placedPos.getX() + 0.5 - client.player.getX();
-                        double dy = (placedPos.getY() + 0.5) - client.player.getEyeY();
-                        double dz = placedPos.getZ() + 0.5 - client.player.getZ();
-                        double distXZ = Math.sqrt(dx * dx + dz * dz);
+                        executeLookAt(client, activePos);
 
-                        client.player.setYaw((float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0));
-                        client.player.setPitch((float) (-Math.toDegrees(Math.atan2(dy, distXZ))));
-
-                        Vec3d hitVec = new Vec3d(placedPos.getX() + 0.5, placedPos.getY() + 0.5, placedPos.getZ() + 0.5);
-                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, placedPos, false);
+                        Vec3d hitVec = new Vec3d(activePos.getX() + 0.5, activePos.getY() + 0.5, activePos.getZ() + 0.5);
+                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, activePos, false);
                         client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
                     }
-                    stage = 0;
-                    placedPos = null;
-                    postActionCooldown = 30;
+                    currentState = 0;
+                    activePos = null;
+                    cooldownTicks = 20; // 1 second clean spacing to prevent packet spam
                 }
                 return;
             }
 
+            // Must hold Lava Bucket to execute automated placement
             if (!client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
                 return;
             }
 
-            // STRICT NEAREST PLAYER TARGETING: Saare players me se jo sabse paas hai sirf use choose karega
-            PlayerEntity target = null;
-            double minDistSq = 16.0; // Max range 4 blocks (4 * 4 = 16)
+            // Target closest enemy within 4 blocks range (16 sq distance)
+            PlayerEntity targetPlayer = null;
+            double nearestDistSq = 16.0;
 
-            for (PlayerEntity player : client.world.getPlayers()) {
-                if (player == client.player) continue;
-                double distSq = client.player.squaredDistanceTo(player);
-                if (distSq < minDistSq) {
-                    target = player;
-                    minDistSq = distSq; // Sabse choti distance wala player target ban jayega
+            for (PlayerEntity entity : client.world.getPlayers()) {
+                if (entity == client.player) continue;
+                double distSq = client.player.squaredDistanceTo(entity);
+                if (distSq < nearestDistSq) {
+                    targetPlayer = entity;
+                    nearestDistSq = distSq;
                 }
             }
 
-            if (target == null) return;
+            if (targetPlayer == null) return;
 
-            // SAFETY: Do not place lava if target is already burning
-            if (target.isOnFire()) return;
+            // SAFETY: Skip if target is already burning
+            if (targetPlayer.isOnFire()) return;
 
-            BlockPos targetPos = target.getBlockPos().down();
+            BlockPos targetBlockPos = targetPlayer.getBlockPos().down();
 
-            // SAFETY: Do not place on water or non-air blocks
-            if (client.world.getBlockState(targetPos).isOf(net.minecraft.block.Blocks.WATER) || 
-                !client.world.getBlockState(targetPos).isAir()) {
+            // SAFETY: Do not place on water or non-air blocks (Prevents obsidian creation)
+            if (client.world.getBlockState(targetBlockPos).isOf(net.minecraft.block.Blocks.WATER) || 
+                !client.world.getBlockState(targetBlockPos).isAir()) {
                 return;
             }
 
             if (client.interactionManager != null) {
-                placedPos = targetPos;
+                activePos = targetBlockPos;
 
-                double dx = placedPos.getX() + 0.5 - client.player.getX();
-                double dy = (placedPos.getY() + 0.5) - client.player.getEyeY();
-                double dz = placedPos.getZ() + 0.5 - client.player.getZ();
-                double distXZ = Math.sqrt(dx * dx + dz * dz);
+                // Execute precise angle calculations and synchronization
+                executeLookAt(client, activePos);
 
-                float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
-                float targetPitch = (float) (-Math.toDegrees(Math.atan2(dy, distXZ)));
-
-                client.player.setYaw(targetYaw);
-                client.player.setPitch(targetPitch);
-
-                client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
-                        client.player.getX(), client.player.getY(), client.player.getZ(),
-                        targetYaw, targetPitch, client.player.isOnGround()
-                ));
-
+                // Instant placement packet and execution
                 client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
 
-                stage = 1;
-                taskTimer = 12;
+                currentState = 1;
+                actionTicks = 8; // Optimized tick duration before triggering the cleanup scoop
             }
         });
 
+        // Native Toggle HUD Notification
         HudRenderCallback.EVENT.register((drawContext, tickDelta) -> {
             if (System.currentTimeMillis() < popupShowUntil) {
                 MinecraftClient client = MinecraftClient.getInstance();
@@ -160,4 +156,25 @@ public class LavaAssistantClient implements ClientModInitializer {
             }
         });
     }
-}
+
+    // Helper method for clean, lag-free look rotation and packet dispatch
+    private void executeLookAt(MinecraftClient client, BlockPos pos) {
+        if (client.player == null || client.getNetworkHandler() == null) return;
+
+        double deltaX = pos.getX() + 0.5 - client.player.getX();
+        double deltaY = (pos.getY() + 0.5) - client.player.getEyeY();
+        double deltaZ = pos.getZ() + 0.5 - client.player.getZ();
+        double horizontalDist = Math.sqrt(deltaX * deltaX + deltaZ * deltaZ);
+
+        float computedYaw = (float) (Math.toDegrees(Math.atan2(deltaZ, deltaX)) - 90.0);
+        float computedPitch = (float) (-Math.toDegrees(Math.atan2(deltaY, horizontalDist)));
+
+        client.player.setYaw(computedYaw);
+        client.player.setPitch(computedPitch);
+
+        client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
+                client.player.getX(), client.player.getY(), client.player.getZ(),
+                computedYaw, computedPitch, client.player.isOnGround()
+        ));
+    }
+            }
