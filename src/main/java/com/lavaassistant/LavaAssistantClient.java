@@ -52,7 +52,6 @@ public class LavaAssistantClient implements ClientModInitializer {
                 return;
             }
 
-            // Target enemy detection (within 5 blocks range for anti-cheat sync)
             PlayerEntity target = null;
             double minDistance = 5.0;
 
@@ -66,7 +65,6 @@ public class LavaAssistantClient implements ClientModInitializer {
             }
 
             if (target != null) {
-                // Check hotbar for Lava Bucket
                 int lavaSlot = -1;
                 for (int i = 0; i < 9; i++) {
                     if (client.player.getInventory().getStack(i).isOf(Items.LAVA_BUCKET)) {
@@ -79,9 +77,8 @@ public class LavaAssistantClient implements ClientModInitializer {
                     int previousSlot = client.player.getInventory().selectedSlot;
                     client.player.getInventory().selectedSlot = lavaSlot;
 
-                    BlockPos targetPos = target.getBlockPos().down(); // Feet level placement
+                    BlockPos targetPos = target.getBlockPos().down();
 
-                    // Anti-Cheat Bypass: Calculate look angles to target and send silent rotation packet
                     double dx = targetPos.getX() + 0.5 - client.player.getX();
                     double dy = (targetPos.getY() + 0.5) - client.player.getEyeY();
                     double dz = targetPos.getZ() + 0.5 - client.player.getZ();
@@ -90,8 +87,8 @@ public class LavaAssistantClient implements ClientModInitializer {
                     float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
                     float targetPitch = (float) (-Math.toDegrees(Math.atan2(dy, distXZ)));
 
-                    // Send rotation packet to bypass strict view checks of Grim/Vulcan anti-cheats
-                    client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.AndOnGround(
+                    // Fixed packet constructor compatible with 1.21.1 mappings
+                    client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
                             client.player.getX(), client.player.getY(), client.player.getZ(),
                             targetYaw, targetPitch, client.player.isOnGround(), false
                     ));
@@ -101,7 +98,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                         BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, targetPos, false);
                         
                         client.interactionManager.interactItem(client.player, net.minecraft.util.Hand.MAIN_HAND);
-                        cooldown = 30; // Increased delay to avoid rate-limit flags by anti-cheat
+                        cooldown = 30;
                     }
 
                     client.player.getInventory().selectedSlot = previousSlot;
