@@ -13,7 +13,10 @@ import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
 public class LavaAssistantClient implements ClientModInitializer {
@@ -24,8 +27,8 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     private static KeyBinding toggleKey;
     private int taskTimer = 0;
-    private int postActionCooldown = 0; // 2-3 seconds ka gap taaki spam na ho
-    private int stage = 0; // 0: Ready to place, 1: Waiting to scoop back
+    private int postActionCooldown = 0;
+    private int stage = 0; // 0: Ready, 1: Waiting to scoop back
     private BlockPos placedPos = null;
 
     @Override
@@ -51,12 +54,23 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             if (!toggleState) return;
 
-            // Cooldown handling
             if (postActionCooldown > 0) {
                 postActionCooldown--;
             }
 
-            // Handle pickup timer (~12 ticks / 0.6 seconds)
+            // SMART MANUAL & AUTO PICKUP DETECTOR:
+            // Agar player ne khud bhi manually lava dala hai aur haath me empty bucket aa gayi hai, toh yeh pakad lega!
+            if (stage == 0 && client.player.getMainHandStack().isOf(Items.BUCKET)) {
+                // Dekho ki player ke bilkul samne ya pairon ke niche kya lava source block mojood hai
+                BlockPos playerLookingPos = client.player.getBlockPos().down();
+                if (client.world.getBlockState(playerLookingPos).isOf(net.minecraft.block.Blocks.LAVA)) {
+                    placedPos = playerLookingPos;
+                    stage = 1;
+                    taskTimer = 8; // Thoda sa wait taaki settle ho aur turant utha le
+                }
+            }
+
+            // Handle pickup timer
             if (taskTimer > 0) {
                 taskTimer--;
                 if (stage == 1 && taskTimer == 0 && placedPos != null) {
@@ -72,16 +86,17 @@ public class LavaAssistantClient implements ClientModInitializer {
                         client.player.setYaw(targetYaw);
                         client.player.setPitch(targetPitch);
 
-                        client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
+                        Vec3d hitVec = new Vec3d(placedPos.getX() + 0.5, placedPos.getY() + 0.5, placedPos.getZ() + 0.5);
+                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, placedPos, false);
+                        client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
                     }
                     stage = 0;
                     placedPos = null;
-                    postActionCooldown = 50; // Lava wapas uthane ke baad 50 ticks (~2.5 seconds) ka gap
+                    postActionCooldown = 25;
                 }
                 return;
             }
 
-            // Agar cooldown chal raha hai toh naya lava mat dalo
             if (postActionCooldown > 0) {
                 return;
             }
@@ -104,7 +119,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
             }
 
-            // Agar enemy aag se jal raha hai, toh lava mat dalo
+            // 1. SAFETY: Agar enemy pehle se aag se jal raha hai, toh lava mat dalo
             if (target != null && target.isOnFire()) {
                 return;
             }
@@ -112,7 +127,7 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (target != null && stage == 0 && client.interactionManager != null) {
                 placedPos = target.getBlockPos().down();
 
-                // PANI CHECK: Agar target ke pairon ke niche pani ya block hai, toh skip karo
+                // 2. SAFETY: PANI YA BLOCK CHECK: Agar wahan pani ya koi block hai toh lava bilkul mat dalo
                 if (client.world.getBlockState(placedPos).isOf(net.minecraft.block.Blocks.WATER) || 
                     !client.world.getBlockState(placedPos).isAir()) {
                     return;
@@ -138,7 +153,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
 
                 stage = 1;
-                taskTimer = 12; // 12 ticks baad wapas uthane ke liye timer start
+                taskTimer = 10;
             }
         });
 
