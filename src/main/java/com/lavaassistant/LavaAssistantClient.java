@@ -52,7 +52,7 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             if (!toggleState) return;
 
-            // Zero-delay ultra fast pickup timer
+            // Handle pickup timer (12 ticks taaki lava settle ho aur empty bucket se wapas uth sake)
             if (taskTimer > 0) {
                 taskTimer--;
                 if (stage == 1 && taskTimer == 0 && placedPos != null) {
@@ -96,6 +96,11 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
             }
 
+            // Agar enemy pehle se aag se jal raha hai, toh lava mat dalo!
+            if (target != null && target.isOnFire()) {
+                return;
+            }
+
             if (target != null && stage == 0 && client.interactionManager != null) {
                 placedPos = target.getBlockPos().down(); // Enemy ke bilkul pairon ke niche ka block
 
@@ -119,7 +124,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
 
                 stage = 1;
-                taskTimer = 3; // Ultra-fast zero delay: sirf 3 ticks (~0.15 sec) me turant wapas utha lega!
+                taskTimer = 12; // 12 ticks baad lava wapas bucket me utha lega
             }
         });
 
