@@ -15,6 +15,7 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Items;
 import net.minecraft.item.SwordItem;
 import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
+import net.minecraft.network.packet.c2s.play.PlayerInteractItemC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
@@ -38,7 +39,7 @@ public class LavaAssistantClient implements ClientModInitializer {
     private static KeyBinding toggleKey;
     private int actionTicks = 0;
     private int cooldownTicks = 0;
-    private int stage = 0; // 0: Searching/Manual Placement, 1: Waiting to scoop back
+    private int stage = 0; // 0: Searching to place, 1: Waiting to scoop back
     private BlockPos targetPos = null;
 
     @Override
@@ -69,59 +70,61 @@ public class LavaAssistantClient implements ClientModInitializer {
                 return;
             }
 
-            // 1. AUTO-PICKUP: Empty bucket + floor lava check
-            if (stage == 0 && client.player.getMainHandStack().isOf(Items.BUCKET)) {
-                BlockPos floorPos = client.player.getBlockPos().down();
-                if (client.world.getBlockState(floorPos).isOf(net.minecraft.block.Blocks.LAVA)) {
-                    targetPos = floorPos;
-                    stage = 1;
-                    actionTicks = 5;
-                }
-            }
-
-            // Pickup Timer Handler + Auto Weapon Switchback
-            if (actionTicks > 0) {
-                actionTicks--;
-                if (actionTicks == 0 && stage == 1 && targetPos != null) {
-                    if (client.player.getMainHandStack().isOf(Items.BUCKET)) {
+            // 1. FULLY AUTO PICKUP: Agar haath me empty bucket hai aur pairon ke niche lava hai
+            if (stage == 1 && client.player.getMainHandStack().isOf(Items.BUCKET)) {
+                if (actionTicks > 0) {
+                    actionTicks--;
+                    if (actionTicks == 0 && targetPos != null) {
                         silentLookAt(client, targetPos);
 
                         Vec3d hitVec = new Vec3d(targetPos.getX() + 0.5, targetPos.getY() + 0.5, targetPos.getZ() + 0.5);
                         BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, targetPos, false);
                         client.getNetworkHandler().sendPacket(new PlayerInteractBlockC2SPacket(Hand.MAIN_HAND, hitResult, 0));
                         client.player.swingHand(Hand.MAIN_HAND);
-                    }
-                    stage = 0;
-                    targetPos = null;
-                    cooldownTicks = 12;
 
-                    // Auto switch back to Sword after successful scoop
-                    switchToSword(client);
+                        stage = 0;
+                        targetPos = null;
+                        cooldownTicks = 12;
+
+                        // Auto switch back to Sword
+                        switchToSword(client);
+                    }
                 }
                 return;
             }
 
+            // Fallback manual bucket detection incase stage missed
+            if (stage == 0 && client.player.getMainHandStack().isOf(Items.BUCKET)) {
+                BlockPos floorPos = client.player.getBlockPos().down();
+                if (client.world.getBlockState(floorPos).isOf(net.minecraft.block.Blocks.LAVA)) {
+                    targetPos = floorPos;
+                    stage = 1;
+                    actionTicks = 5;
+                    return;
+                }
+            }
+
+            // Must hold Lava Bucket for automated placement
             if (!client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
                 return;
             }
 
-            // 2. ADVANCED TARGETING: Health Priority + Ping Compensation + Movement Prediction + LoS + Safety
+            // 2. FULLY AUTO TARGETING: Health Priority + Ping + Prediction + LoS + Safety
             PlayerEntity bestTarget = null;
             BlockPos predictedPos = null;
             double bestScore = Double.MAX_VALUE;
 
-            // Ping compensation calculation (latency in ticks)
             double pingTicks = 0.0;
             PlayerListEntry entry = client.getNetworkHandler().getPlayerListEntry(client.player.getUuid());
             if (entry != null) {
-                pingTicks = entry.getLatency() / 50.0; // 50ms per tick roughly
+                pingTicks = entry.getLatency() / 50.0;
             }
 
             for (PlayerEntity player : client.world.getPlayers()) {
                 if (player == client.player) continue;
 
                 double distSq = client.player.squaredDistanceTo(player);
-                if (distSq > 16.0) continue; // 4 blocks range limit
+                if (distSq > 16.0) continue; // 4 blocks range
 
                 // Safety: Skip burning targets
                 if (player.isOnFire()) continue;
@@ -131,7 +134,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 Vec3d lookDir = client.player.getRotationVector();
                 if (lookDir.dotProduct(toPlayer) < 0.25) continue;
 
-                // Ping + Movement Prediction (Velocity tracking based on latency)
+                // Prediction based on velocity & ping
                 double predictionFactor = 1.0 + (pingTicks * 0.5);
                 Vec3d futurePos = player.getPos().add(player.getVelocity().multiply(predictionFactor));
                 BlockPos pPos = BlockPos.ofFloored(futurePos).down();
@@ -149,8 +152,8 @@ public class LavaAssistantClient implements ClientModInitializer {
                     continue;
                 }
 
-                // Health & Distance Scoring (Lower health = higher priority)
-                double healthWeight = (20.0 - player.getHealth()) * 0.5; // Lower health reduces score
+                // Health & Distance Scoring
+                double healthWeight = (20.0 - player.getHealth()) * 0.5;
                 double score = distSq - healthWeight;
 
                 if (score < bestScore) {
@@ -163,12 +166,19 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (bestTarget != null && predictedPos != null) {
                 targetPos = predictedPos;
                 silentLookAt(client, targetPos);
+
+                // FULLY AUTO PLACE: Send packet to place lava instantly
+                client.getNetworkHandler().sendPacket(new PlayerInteractItemC2SPacket(Hand.MAIN_HAND, 0, client.player.getYaw(), client.player.getPitch()));
+                client.player.swingHand(Hand.MAIN_HAND);
+
+                stage = 1;
+                actionTicks = 10; // Wait 10 ticks for lava to settle before auto pickup
             } else {
                 targetPos = null;
             }
         });
 
-        // Visual ESP (Glowing outline box on targeted block)
+        // Visual ESP Box
         WorldRenderEvents.LAST.register(context -> {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.player == null || !toggleState || targetPos == null) return;
@@ -196,7 +206,7 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (System.currentTimeMillis() < popupShowUntil) {
                 MinecraftClient client = MinecraftClient.getInstance();
 
-                String msg = toggleState ? "ON (Ultimate Ghost Pro)" : "OFF";
+                String msg = toggleState ? "ON (Fully Auto)" : "OFF";
                 Formatting color = toggleState ? Formatting.GREEN : Formatting.RED;
 
                 int screenWidth = client.getWindow().getScaledWidth();
@@ -214,7 +224,6 @@ public class LavaAssistantClient implements ClientModInitializer {
         });
     }
 
-    // Silent Rotation: Server ko exact angle bhejta hai bina local player screen ko violently jerk kiye
     private void silentLookAt(MinecraftClient client, BlockPos pos) {
         if (client.player == null || client.getNetworkHandler() == null) return;
 
@@ -226,14 +235,12 @@ public class LavaAssistantClient implements ClientModInitializer {
         float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float targetPitch = (float) (-Math.toDegrees(Math.atan2(dy, distXZ)));
 
-        // Send silent packet to server
         client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
                 client.player.getX(), client.player.getY(), client.player.getZ(),
                 targetYaw, targetPitch, client.player.isOnGround()
         ));
     }
 
-    // Raycast Line of Sight Check
     private boolean hasLineOfSight(MinecraftClient client, BlockPos pos) {
         if (client.world == null || client.player == null) return false;
         Vec3d eyes = client.player.getEyePos();
@@ -248,7 +255,6 @@ public class LavaAssistantClient implements ClientModInitializer {
         return result.getType() == HitResult.Type.MISS || result.getBlockPos().equals(pos);
     }
 
-    // Auto Switch to Sword after picking up lava
     private void switchToSword(MinecraftClient client) {
         if (client.player == null) return;
         for (int i = 0; i < 9; i++) {
