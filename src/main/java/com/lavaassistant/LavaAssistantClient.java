@@ -1,22 +1,32 @@
 package com.example.lavaassistant;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.PlayerListEntry;
 import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.render.*;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Items;
+import net.minecraft.item.SwordItem;
+import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.RaycastContext;
+import org.joml.Matrix4f;
 import org.lwjgl.glfw.GLFW;
 
 public class LavaAssistantClient implements ClientModInitializer {
@@ -28,8 +38,8 @@ public class LavaAssistantClient implements ClientModInitializer {
     private static KeyBinding toggleKey;
     private int actionTicks = 0;
     private int cooldownTicks = 0;
-    private int currentState = 0; // 0: Idle, 1: Placed (Pending Scoop)
-    private BlockPos activePos = null;
+    private int stage = 0; // 0: Searching/Manual Placement, 1: Waiting to scoop back
+    private BlockPos targetPos = null;
 
     @Override
     public void onInitializeClient() {
@@ -46,100 +56,147 @@ public class LavaAssistantClient implements ClientModInitializer {
             while (toggleKey.wasPressed()) {
                 toggleState = !toggleState;
                 popupShowUntil = System.currentTimeMillis() + POPUP_DURATION_MS;
-                currentState = 0;
+                stage = 0;
                 actionTicks = 0;
                 cooldownTicks = 0;
-                activePos = null;
+                targetPos = null;
             }
 
             if (!toggleState) return;
 
-            // Global cooldown management
             if (cooldownTicks > 0) {
                 cooldownTicks--;
                 return;
             }
 
-            // High-Level Smart Manual / Auto Pickup Detector:
-            // Chaise mod ne dala ho ya tune khud manually dala ho, agar haath me empty bucket hai aur lava block mojood hai, toh utha lo!
-            if (currentState == 0 && client.player.getMainHandStack().isOf(Items.BUCKET)) {
+            // 1. AUTO-PICKUP: Empty bucket + floor lava check
+            if (stage == 0 && client.player.getMainHandStack().isOf(Items.BUCKET)) {
                 BlockPos floorPos = client.player.getBlockPos().down();
                 if (client.world.getBlockState(floorPos).isOf(net.minecraft.block.Blocks.LAVA)) {
-                    activePos = floorPos;
-                    currentState = 1;
-                    actionTicks = 6; // Ultra-fast optimized pickup delay (~0.3s)
+                    targetPos = floorPos;
+                    stage = 1;
+                    actionTicks = 5;
                 }
             }
 
-            // Active Task Handler (Scooping back the lava)
+            // Pickup Timer Handler + Auto Weapon Switchback
             if (actionTicks > 0) {
                 actionTicks--;
-                if (actionTicks == 0 && currentState == 1 && activePos != null && client.interactionManager != null) {
+                if (actionTicks == 0 && stage == 1 && targetPos != null) {
                     if (client.player.getMainHandStack().isOf(Items.BUCKET)) {
-                        executeLookAt(client, activePos);
+                        silentLookAt(client, targetPos);
 
-                        Vec3d hitVec = new Vec3d(activePos.getX() + 0.5, activePos.getY() + 0.5, activePos.getZ() + 0.5);
-                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, activePos, false);
-                        client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
+                        Vec3d hitVec = new Vec3d(targetPos.getX() + 0.5, targetPos.getY() + 0.5, targetPos.getZ() + 0.5);
+                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, targetPos, false);
+                        client.getNetworkHandler().sendPacket(new PlayerInteractBlockC2SPacket(Hand.MAIN_HAND, hitResult, 0));
+                        client.player.swingHand(Hand.MAIN_HAND);
                     }
-                    currentState = 0;
-                    activePos = null;
-                    cooldownTicks = 20; // 1 second clean spacing to prevent packet spam
+                    stage = 0;
+                    targetPos = null;
+                    cooldownTicks = 12;
+
+                    // Auto switch back to Sword after successful scoop
+                    switchToSword(client);
                 }
                 return;
             }
 
-            // Must hold Lava Bucket to execute automated placement
             if (!client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
                 return;
             }
 
-            // Target closest enemy within 4 blocks range (16 sq distance)
-            PlayerEntity targetPlayer = null;
-            double nearestDistSq = 16.0;
+            // 2. ADVANCED TARGETING: Health Priority + Ping Compensation + Movement Prediction + LoS + Safety
+            PlayerEntity bestTarget = null;
+            BlockPos predictedPos = null;
+            double bestScore = Double.MAX_VALUE;
 
-            for (PlayerEntity entity : client.world.getPlayers()) {
-                if (entity == client.player) continue;
-                double distSq = client.player.squaredDistanceTo(entity);
-                if (distSq < nearestDistSq) {
-                    targetPlayer = entity;
-                    nearestDistSq = distSq;
+            // Ping compensation calculation (latency in ticks)
+            double pingTicks = 0.0;
+            PlayerListEntry entry = client.getNetworkHandler().getPlayerListEntry(client.player.getUuid());
+            if (entry != null) {
+                pingTicks = entry.getLatency() / 50.0; // 50ms per tick roughly
+            }
+
+            for (PlayerEntity player : client.world.getPlayers()) {
+                if (player == client.player) continue;
+
+                double distSq = client.player.squaredDistanceTo(player);
+                if (distSq > 16.0) continue; // 4 blocks range limit
+
+                // Safety: Skip burning targets
+                if (player.isOnFire()) continue;
+
+                // FOV Check: Front 80 degrees
+                Vec3d toPlayer = player.getPos().subtract(client.player.getPos()).normalize();
+                Vec3d lookDir = client.player.getRotationVector();
+                if (lookDir.dotProduct(toPlayer) < 0.25) continue;
+
+                // Ping + Movement Prediction (Velocity tracking based on latency)
+                double predictionFactor = 1.0 + (pingTicks * 0.5);
+                Vec3d futurePos = player.getPos().add(player.getVelocity().multiply(predictionFactor));
+                BlockPos pPos = BlockPos.ofFloored(futurePos).down();
+
+                if (!client.world.getBlockState(pPos).isAir()) {
+                    pPos = player.getBlockPos().down();
+                }
+
+                // Line of Sight Check
+                if (!hasLineOfSight(client, pPos)) continue;
+
+                // Water / Non-air Safety Check
+                if (client.world.getBlockState(pPos).isOf(net.minecraft.block.Blocks.WATER) || 
+                    !client.world.getBlockState(pPos).isAir()) {
+                    continue;
+                }
+
+                // Health & Distance Scoring (Lower health = higher priority)
+                double healthWeight = (20.0 - player.getHealth()) * 0.5; // Lower health reduces score
+                double score = distSq - healthWeight;
+
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestTarget = player;
+                    predictedPos = pPos;
                 }
             }
 
-            if (targetPlayer == null) return;
-
-            // SAFETY: Skip if target is already burning
-            if (targetPlayer.isOnFire()) return;
-
-            BlockPos targetBlockPos = targetPlayer.getBlockPos().down();
-
-            // SAFETY: Do not place on water or non-air blocks (Prevents obsidian creation)
-            if (client.world.getBlockState(targetBlockPos).isOf(net.minecraft.block.Blocks.WATER) || 
-                !client.world.getBlockState(targetBlockPos).isAir()) {
-                return;
-            }
-
-            if (client.interactionManager != null) {
-                activePos = targetBlockPos;
-
-                // Execute precise angle calculations and synchronization
-                executeLookAt(client, activePos);
-
-                // Instant placement packet and execution
-                client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
-
-                currentState = 1;
-                actionTicks = 8; // Optimized tick duration before triggering the cleanup scoop
+            if (bestTarget != null && predictedPos != null) {
+                targetPos = predictedPos;
+                silentLookAt(client, targetPos);
+            } else {
+                targetPos = null;
             }
         });
 
-        // Native Toggle HUD Notification
+        // Visual ESP (Glowing outline box on targeted block)
+        WorldRenderEvents.LAST.register(context -> {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player == null || !toggleState || targetPos == null) return;
+
+            Vec3d cameraPos = client.gameRenderer.getCamera().getPos();
+            Matrix4f matrix = context.matrixStack().peek().getPositionMatrix();
+            Tessellator tessellator = Tessellator.getInstance();
+            BufferBuilder buffer = tessellator.begin(VertexFormat.DrawMode.LINES, VertexFormats.POSITION_COLOR);
+
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+            RenderSystem.disableDepthTest();
+            RenderSystem.setShader(GameRenderer::getPositionColorProgram);
+
+            Box box = new Box(targetPos).offset(-cameraPos.x, -cameraPos.y, -cameraPos.z);
+            WorldRenderer.drawBox(context.matrixStack(), buffer, box.minX, box.minY, box.minZ, box.maxX, box.maxY, box.maxZ, 1.0f, 0.3f, 0.0f, 0.8f);
+            BufferRenderer.drawWithGlobalProgram(buffer.end());
+
+            RenderSystem.enableDepthTest();
+            RenderSystem.disableBlend();
+        });
+
+        // Toggle HUD Indicator
         HudRenderCallback.EVENT.register((drawContext, tickDelta) -> {
             if (System.currentTimeMillis() < popupShowUntil) {
                 MinecraftClient client = MinecraftClient.getInstance();
 
-                String msg = toggleState ? "ON" : "OFF";
+                String msg = toggleState ? "ON (Ultimate Ghost Pro)" : "OFF";
                 Formatting color = toggleState ? Formatting.GREEN : Formatting.RED;
 
                 int screenWidth = client.getWindow().getScaledWidth();
@@ -157,24 +214,48 @@ public class LavaAssistantClient implements ClientModInitializer {
         });
     }
 
-    // Helper method for clean, lag-free look rotation and packet dispatch
-    private void executeLookAt(MinecraftClient client, BlockPos pos) {
+    // Silent Rotation: Server ko exact angle bhejta hai bina local player screen ko violently jerk kiye
+    private void silentLookAt(MinecraftClient client, BlockPos pos) {
         if (client.player == null || client.getNetworkHandler() == null) return;
 
-        double deltaX = pos.getX() + 0.5 - client.player.getX();
-        double deltaY = (pos.getY() + 0.5) - client.player.getEyeY();
-        double deltaZ = pos.getZ() + 0.5 - client.player.getZ();
-        double horizontalDist = Math.sqrt(deltaX * deltaX + deltaZ * deltaZ);
+        double dx = pos.getX() + 0.5 - client.player.getX();
+        double dy = (pos.getY() + 0.5) - client.player.getEyeY();
+        double dz = pos.getZ() + 0.5 - client.player.getZ();
+        double distXZ = Math.sqrt(dx * dx + dz * dz);
 
-        float computedYaw = (float) (Math.toDegrees(Math.atan2(deltaZ, deltaX)) - 90.0);
-        float computedPitch = (float) (-Math.toDegrees(Math.atan2(deltaY, horizontalDist)));
+        float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
+        float targetPitch = (float) (-Math.toDegrees(Math.atan2(dy, distXZ)));
 
-        client.player.setYaw(computedYaw);
-        client.player.setPitch(computedPitch);
-
+        // Send silent packet to server
         client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
                 client.player.getX(), client.player.getY(), client.player.getZ(),
-                computedYaw, computedPitch, client.player.isOnGround()
+                targetYaw, targetPitch, client.player.isOnGround()
         ));
     }
+
+    // Raycast Line of Sight Check
+    private boolean hasLineOfSight(MinecraftClient client, BlockPos pos) {
+        if (client.world == null || client.player == null) return false;
+        Vec3d eyes = client.player.getEyePos();
+        Vec3d targetCenter = new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+        
+        BlockHitResult result = client.world.raycast(new RaycastContext(
+                eyes, targetCenter,
+                RaycastContext.ShapeType.COLLIDER,
+                RaycastContext.FluidHandling.NONE,
+                client.player
+        ));
+        return result.getType() == HitResult.Type.MISS || result.getBlockPos().equals(pos);
+    }
+
+    // Auto Switch to Sword after picking up lava
+    private void switchToSword(MinecraftClient client) {
+        if (client.player == null) return;
+        for (int i = 0; i < 9; i++) {
+            if (client.player.getInventory().getStack(i).getItem() instanceof SwordItem) {
+                client.player.getInventory().selectedSlot = i;
+                break;
             }
+        }
+    }
+}
