@@ -52,13 +52,23 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             if (!toggleState) return;
 
-            // Handle fast pickup timer
+            // Zero-delay ultra fast pickup timer
             if (taskTimer > 0) {
                 taskTimer--;
                 if (stage == 1 && taskTimer == 0 && placedPos != null) {
-                    // Jab lava place ho jata hai, bucket automatically empty bucket ban jati hai hand me
                     if (client.player.getMainHandStack().isOf(Items.BUCKET) && client.interactionManager != null) {
-                        Vec3d hitVec = new Vec3d(placedPos.getX() + 0.5, placedPos.getY() + 1.0, placedPos.getZ() + 0.5);
+                        double dx = placedPos.getX() + 0.5 - client.player.getX();
+                        double dy = (placedPos.getY() + 0.5) - client.player.getEyeY();
+                        double dz = placedPos.getZ() + 0.5 - client.player.getZ();
+                        double distXZ = Math.sqrt(dx * dx + dz * dz);
+
+                        float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
+                        float targetPitch = (float) (-Math.toDegrees(Math.atan2(dy, distXZ)));
+
+                        client.player.setYaw(targetYaw);
+                        client.player.setPitch(targetPitch);
+
+                        Vec3d hitVec = new Vec3d(placedPos.getX() + 0.5, placedPos.getY() + 0.5, placedPos.getZ() + 0.5);
                         BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, placedPos, false);
                         client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
                     }
@@ -89,7 +99,6 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (target != null && stage == 0 && client.interactionManager != null) {
                 placedPos = target.getBlockPos().down(); // Enemy ke bilkul pairon ke niche ka block
 
-                // Accurate rotation packet taaki exact enemy ke pairon par lava view-angle match kare
                 double dx = placedPos.getX() + 0.5 - client.player.getX();
                 double dy = (placedPos.getY() + 0.5) - client.player.getEyeY();
                 double dz = placedPos.getZ() + 0.5 - client.player.getZ();
@@ -97,6 +106,9 @@ public class LavaAssistantClient implements ClientModInitializer {
 
                 float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
                 float targetPitch = (float) (-Math.toDegrees(Math.atan2(dy, distXZ)));
+
+                client.player.setYaw(targetYaw);
+                client.player.setPitch(targetPitch);
 
                 client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
                         client.player.getX(), client.player.getY(), client.player.getZ(),
@@ -107,7 +119,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
 
                 stage = 1;
-                taskTimer = 10; // Fast pickup delay (~0.5 seconds ke andar turant wapas utha lega)
+                taskTimer = 3; // Ultra-fast zero delay: sirf 3 ticks (~0.15 sec) me turant wapas utha lega!
             }
         });
 
