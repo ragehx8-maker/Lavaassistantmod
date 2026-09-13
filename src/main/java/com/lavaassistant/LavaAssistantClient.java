@@ -25,7 +25,9 @@ public class LavaAssistantClient implements ClientModInitializer {
     private static final long POPUP_DURATION_MS = 1500;
 
     private static KeyBinding toggleKey;
-    private int cooldown = 0;
+    private int stateTimer = 0;
+    private boolean hasPlaced = false;
+    private BlockPos placedPos = null;
 
     @Override
     public void onInitializeClient() {
@@ -43,12 +45,40 @@ public class LavaAssistantClient implements ClientModInitializer {
             while (toggleKey.wasPressed()) {
                 toggleState = !toggleState;
                 popupShowUntil = System.currentTimeMillis() + POPUP_DURATION_MS;
+                hasPlaced = false;
+                stateTimer = 0;
             }
 
             if (!toggleState) return;
 
-            if (cooldown > 0) {
-                cooldown--;
+            if (stateTimer > 0) {
+                stateTimer--;
+                
+                if (hasPlaced && stateTimer == 5 && placedPos != null) {
+                    int bucketSlot = -1;
+                    for (int i = 0; i < 9; i++) {
+                        if (client.player.getInventory().getStack(i).isOf(Items.BUCKET) || 
+                            client.player.getInventory().getStack(i).isOf(Items.LAVA_BUCKET)) {
+                            bucketSlot = i;
+                            break;
+                        }
+                    }
+
+                    if (bucketSlot != -1) {
+                        int prevSlot = client.player.getInventory().selectedSlot;
+                        client.player.getInventory().selectedSlot = bucketSlot;
+
+                        if (client.interactionManager != null) {
+                            Vec3d hitVec = new Vec3d(placedPos.getX() + 0.5, placedPos.getY() + 1.0, placedPos.getZ() + 0.5);
+                            BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, placedPos, false);
+                            client.interactionManager.interactBlock(client.player, net.minecraft.util.Hand.MAIN_HAND, hitResult);
+                        }
+
+                        client.player.getInventory().selectedSlot = prevSlot;
+                    }
+                    hasPlaced = false;
+                    placedPos = null;
+                }
                 return;
             }
 
@@ -77,28 +107,29 @@ public class LavaAssistantClient implements ClientModInitializer {
                     int previousSlot = client.player.getInventory().selectedSlot;
                     client.player.getInventory().selectedSlot = lavaSlot;
 
-                    BlockPos targetPos = target.getBlockPos().down();
+                    placedPos = target.getBlockPos().down();
 
-                    double dx = targetPos.getX() + 0.5 - client.player.getX();
-                    double dy = (targetPos.getY() + 0.5) - client.player.getEyeY();
-                    double dz = targetPos.getZ() + 0.5 - client.player.getZ();
+                    double dx = placedPos.getX() + 0.5 - client.player.getX();
+                    double dy = (placedPos.getY() + 0.5) - client.player.getEyeY();
+                    double dz = placedPos.getZ() + 0.5 - client.player.getZ();
                     double distXZ = Math.sqrt(dx * dx + dz * dz);
 
                     float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
                     float targetPitch = (float) (-Math.toDegrees(Math.atan2(dy, distXZ)));
 
-                    // Fixed packet constructor compatible with 1.21.1 mappings
+                    // Corrected constructor argument list for 1.21.1
                     client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
                             client.player.getX(), client.player.getY(), client.player.getZ(),
-                            targetYaw, targetPitch, client.player.isOnGround(), false
+                            targetYaw, targetPitch, client.player.isOnGround()
                     ));
 
                     if (client.interactionManager != null) {
-                        Vec3d hitVec = new Vec3d(targetPos.getX() + 0.5, targetPos.getY() + 1.0, targetPos.getZ() + 0.5);
-                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, targetPos, false);
+                        Vec3d hitVec = new Vec3d(placedPos.getX() + 0.5, placedPos.getY() + 1.0, placedPos.getZ() + 0.5);
+                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, placedPos, false);
                         
                         client.interactionManager.interactItem(client.player, net.minecraft.util.Hand.MAIN_HAND);
-                        cooldown = 30;
+                        hasPlaced = true;
+                        stateTimer = 25;
                     }
 
                     client.player.getInventory().selectedSlot = previousSlot;
