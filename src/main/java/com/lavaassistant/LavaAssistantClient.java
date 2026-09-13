@@ -16,7 +16,6 @@ public class LavaAssistantClient implements ClientModInitializer {
     public void onInitializeClient() {
         keyBinding = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.lavaassistant.toggle",
-                InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_G,
                 "key.categories.misc"
         ));
