@@ -10,7 +10,7 @@ import org.lwjgl.glfw.GLFW;
 
 public class LavaAssistantClient implements ClientModInitializer {
     private boolean toggled = false;
-    private KeyBinding keyBinding;
+    private static KeyBinding keyBinding;
 
     @Override
     public void onInitializeClient() {
@@ -18,7 +18,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 "key.lavaassistant.toggle",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_G,
-                "category.lavaassistant.general"
+                "key.categories.misc"
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
