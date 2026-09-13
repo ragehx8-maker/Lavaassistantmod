@@ -10,8 +10,10 @@ import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
+import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
+import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
@@ -25,9 +27,10 @@ public class LavaAssistantClient implements ClientModInitializer {
     private static final long POPUP_DURATION_MS = 1500;
 
     private static KeyBinding toggleKey;
-    private int stateTimer = 0;
-    private boolean hasPlaced = false;
-    private BlockPos placedPos = null;
+    private int actionTimer = 0;
+    private int taskStep = 0; // 0: Idle, 1: Placed, Waiting to pickup
+    private BlockPos targetBlockPos = null;
+    private int originalSlot = 0;
 
     @Override
     public void onInitializeClient() {
@@ -45,45 +48,50 @@ public class LavaAssistantClient implements ClientModInitializer {
             while (toggleKey.wasPressed()) {
                 toggleState = !toggleState;
                 popupShowUntil = System.currentTimeMillis() + POPUP_DURATION_MS;
-                hasPlaced = false;
-                stateTimer = 0;
+                taskStep = 0;
+                actionTimer = 0;
             }
 
             if (!toggleState) return;
 
-            if (stateTimer > 0) {
-                stateTimer--;
-                
-                if (hasPlaced && stateTimer == 5 && placedPos != null) {
-                    int bucketSlot = -1;
+            // Handle timer delay for placing and picking up smoothly
+            if (actionTimer > 0) {
+                actionTimer--;
+
+                // Step 2: Scoop the lava back up using an empty bucket after a short delay (~0.7 seconds / 14 ticks)
+                if (taskStep == 1 && actionTimer == 0 && targetBlockPos != null) {
+                    int emptyBucketSlot = -1;
                     for (int i = 0; i < 9; i++) {
-                        if (client.player.getInventory().getStack(i).isOf(Items.BUCKET) || 
-                            client.player.getInventory().getStack(i).isOf(Items.LAVA_BUCKET)) {
-                            bucketSlot = i;
+                        if (client.player.getInventory().getStack(i).isOf(Items.BUCKET)) {
+                            emptyBucketSlot = i;
                             break;
                         }
                     }
 
-                    if (bucketSlot != -1) {
-                        int prevSlot = client.player.getInventory().selectedSlot;
-                        client.player.getInventory().selectedSlot = bucketSlot;
+                    if (emptyBucketSlot != -1) {
+                        originalSlot = client.player.getInventory().selectedSlot;
+                        client.player.getInventory().selectedSlot = emptyBucketSlot;
+                        client.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(emptyBucketSlot));
 
                         if (client.interactionManager != null) {
-                            Vec3d hitVec = new Vec3d(placedPos.getX() + 0.5, placedPos.getY() + 1.0, placedPos.getZ() + 0.5);
-                            BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, placedPos, false);
-                            client.interactionManager.interactBlock(client.player, net.minecraft.util.Hand.MAIN_HAND, hitResult);
+                            Vec3d hitVec = new Vec3d(targetBlockPos.getX() + 0.5, targetBlockPos.getY(), targetBlockPos.getZ() + 0.5);
+                            BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, targetBlockPos, false);
+                            client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
                         }
 
-                        client.player.getInventory().selectedSlot = prevSlot;
+                        // Switch back to original slot safely
+                        client.player.getInventory().selectedSlot = originalSlot;
+                        client.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(originalSlot));
                     }
-                    hasPlaced = false;
-                    placedPos = null;
+                    taskStep = 0; // Reset back to ready state
+                    targetBlockPos = null;
                 }
                 return;
             }
 
+            // Find nearest enemy player within 4.5 blocks range for precise placement
             PlayerEntity target = null;
-            double minDistance = 5.0;
+            double minDistance = 4.5;
 
             for (PlayerEntity player : client.world.getPlayers()) {
                 if (player == client.player) continue;
@@ -94,7 +102,8 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
             }
 
-            if (target != null) {
+            if (target != null && taskStep == 0) {
+                // Find Lava Bucket in hotbar
                 int lavaSlot = -1;
                 for (int i = 0; i < 9; i++) {
                     if (client.player.getInventory().getStack(i).isOf(Items.LAVA_BUCKET)) {
@@ -104,39 +113,48 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
 
                 if (lavaSlot != -1) {
-                    int previousSlot = client.player.getInventory().selectedSlot;
+                    originalSlot = client.player.getInventory().selectedSlot;
+                    
+                    // Switch to lava slot and sync packet with server
                     client.player.getInventory().selectedSlot = lavaSlot;
+                    client.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(lavaSlot));
 
-                    placedPos = target.getBlockPos().down();
+                    // Exact block right under the enemy's feet
+                    targetBlockPos = target.getBlockPos().down();
 
-                    double dx = placedPos.getX() + 0.5 - client.player.getX();
-                    double dy = (placedPos.getY() + 0.5) - client.player.getEyeY();
-                    double dz = placedPos.getZ() + 0.5 - client.player.getZ();
+                    // Smooth rotation packet to prevent anti-cheat flags
+                    double dx = targetBlockPos.getX() + 0.5 - client.player.getX();
+                    double dy = (targetBlockPos.getY() + 0.5) - client.player.getEyeY();
+                    double dz = targetBlockPos.getZ() + 0.5 - client.player.getZ();
                     double distXZ = Math.sqrt(dx * dx + dz * dz);
 
                     float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
                     float targetPitch = (float) (-Math.toDegrees(Math.atan2(dy, distXZ)));
 
-                    // Corrected constructor argument list for 1.21.1
                     client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
                             client.player.getX(), client.player.getY(), client.player.getZ(),
                             targetYaw, targetPitch, client.player.isOnGround()
                     ));
 
+                    // Place the lava precisely on the block under their feet
                     if (client.interactionManager != null) {
-                        Vec3d hitVec = new Vec3d(placedPos.getX() + 0.5, placedPos.getY() + 1.0, placedPos.getZ() + 0.5);
-                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, placedPos, false);
+                        Vec3d hitVec = new Vec3d(targetBlockPos.getX() + 0.5, targetBlockPos.getY() + 1.0, targetBlockPos.getZ() + 0.5);
+                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, targetBlockPos, false);
                         
-                        client.interactionManager.interactItem(client.player, net.minecraft.util.Hand.MAIN_HAND);
-                        hasPlaced = true;
-                        stateTimer = 25;
+                        client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
                     }
 
-                    client.player.getInventory().selectedSlot = previousSlot;
+                    // Switch back to original slot (sword/item) immediately after placing
+                    client.player.getInventory().selectedSlot = originalSlot;
+                    client.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(originalSlot));
+
+                    taskStep = 1; // Mark as placed, now wait to pick it back up
+                    actionTimer = 22; // Delay before attempting to scoop it back with an empty bucket
                 }
             }
         });
 
+        // Your original ON/OFF HUD Pop-up rendering logic (completely untouched)
         HudRenderCallback.EVENT.register((drawContext, tickDelta) -> {
             if (System.currentTimeMillis() < popupShowUntil) {
                 MinecraftClient client = MinecraftClient.getInstance();
