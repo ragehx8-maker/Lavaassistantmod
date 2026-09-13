@@ -1,5 +1,5 @@
 plugins {
-    id 'fabric-loom' version '1.8-SNAPSHOT'
+    id 'fabric-loom' version '1.8.13'
     id 'maven-publish'
 }
 
@@ -10,13 +10,16 @@ base {
     archivesName = 'lavaassistant'
 }
 
-repositories {}
+repositories {
+    mavenCentral()
+    maven { url 'https://maven.fabricmc.net/' }
+}
 
 dependencies {
     minecraft "com.mojang:minecraft:1.21.1"
     mappings "net.fabricmc:yarn:1.21.1+build.3:v2"
     modImplementation "net.fabricmc:fabric-loader:0.15.11"
-    modImplementation "net.fabricmc:fabric-api:fabric-api:0.101.0+1.21.1"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:0.102.0+1.21.1"
 }
 
 processResources {
