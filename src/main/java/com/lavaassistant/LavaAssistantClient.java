@@ -13,10 +13,7 @@ import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Hand;
-import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
 public class LavaAssistantClient implements ClientModInitializer {
@@ -27,6 +24,7 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     private static KeyBinding toggleKey;
     private int taskTimer = 0;
+    private int postActionCooldown = 0; // 2-3 seconds ka gap taaki spam na ho
     private int stage = 0; // 0: Ready to place, 1: Waiting to scoop back
     private BlockPos placedPos = null;
 
@@ -47,12 +45,18 @@ public class LavaAssistantClient implements ClientModInitializer {
                 popupShowUntil = System.currentTimeMillis() + POPUP_DURATION_MS;
                 stage = 0;
                 taskTimer = 0;
+                postActionCooldown = 0;
                 placedPos = null;
             }
 
             if (!toggleState) return;
 
-            // Handle pickup timer (12 ticks taaki lava settle ho aur empty bucket se wapas uth sake)
+            // Cooldown handling
+            if (postActionCooldown > 0) {
+                postActionCooldown--;
+            }
+
+            // Handle pickup timer (~12 ticks / 0.6 seconds)
             if (taskTimer > 0) {
                 taskTimer--;
                 if (stage == 1 && taskTimer == 0 && placedPos != null) {
@@ -68,22 +72,26 @@ public class LavaAssistantClient implements ClientModInitializer {
                         client.player.setYaw(targetYaw);
                         client.player.setPitch(targetPitch);
 
-                        Vec3d hitVec = new Vec3d(placedPos.getX() + 0.5, placedPos.getY() + 0.5, placedPos.getZ() + 0.5);
-                        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, placedPos, false);
-                        client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
+                        client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
                     }
                     stage = 0;
                     placedPos = null;
+                    postActionCooldown = 50; // Lava wapas uthane ke baad 50 ticks (~2.5 seconds) ka gap
                 }
                 return;
             }
 
-            // Sirf tabhi chale jab tu manually haath me Lava Bucket pakde ho
+            // Agar cooldown chal raha hai toh naya lava mat dalo
+            if (postActionCooldown > 0) {
+                return;
+            }
+
+            // Sirf tabhi chale jab haath me Lava Bucket ho
             if (!client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
                 return;
             }
 
-            // Aas-paas ke enemy player ko detect karna (4 blocks range)
+            // Target enemy detection (4 blocks range)
             PlayerEntity target = null;
             double minDistSq = 16.0;
 
@@ -96,13 +104,19 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
             }
 
-            // Agar enemy pehle se aag se jal raha hai, toh lava mat dalo!
+            // Agar enemy aag se jal raha hai, toh lava mat dalo
             if (target != null && target.isOnFire()) {
                 return;
             }
 
             if (target != null && stage == 0 && client.interactionManager != null) {
-                placedPos = target.getBlockPos().down(); // Enemy ke bilkul pairon ke niche ka block
+                placedPos = target.getBlockPos().down();
+
+                // PANI CHECK: Agar target ke pairon ke niche pani ya block hai, toh skip karo
+                if (client.world.getBlockState(placedPos).isOf(net.minecraft.block.Blocks.WATER) || 
+                    !client.world.getBlockState(placedPos).isAir()) {
+                    return;
+                }
 
                 double dx = placedPos.getX() + 0.5 - client.player.getX();
                 double dy = (placedPos.getY() + 0.5) - client.player.getEyeY();
@@ -120,11 +134,11 @@ public class LavaAssistantClient implements ClientModInitializer {
                         targetYaw, targetPitch, client.player.isOnGround()
                 ));
 
-                // Precise lava placement
+                // Place lava
                 client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
 
                 stage = 1;
-                taskTimer = 12; // 12 ticks baad lava wapas bucket me utha lega
+                taskTimer = 12; // 12 ticks baad wapas uthane ke liye timer start
             }
         });
 
