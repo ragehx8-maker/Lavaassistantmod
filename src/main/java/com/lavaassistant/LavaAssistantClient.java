@@ -20,6 +20,7 @@ import net.minecraft.util.ActionResult;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult; // Yeh line miss thi, ab add kar di hai!
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
@@ -40,7 +41,6 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     private static KeyBinding toggleKey;
     
-    // Professional Configuration: Target-specific hit tracking
     public static final int TARGET_HIT_COUNT = 4;
     private final Map<UUID, Integer> playerHitCounts = new HashMap<>();
 
@@ -78,7 +78,6 @@ public class LavaAssistantClient implements ClientModInitializer {
                 return;
             }
 
-            // Fail-safe cleanup: Agar player mar gaya ya world change ho gaya
             if (client.player.isDead()) {
                 state = 0;
                 targetPos = null;
@@ -90,7 +89,6 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (state == 1) {
                 timer++;
                 if (timer >= 15 && targetPos != null) {
-                    // Check if empty bucket exists in hotbar
                     if (!client.player.getMainHandStack().isOf(Items.BUCKET)) {
                         switchToEmptyBucket(client);
                     }
@@ -112,7 +110,6 @@ public class LavaAssistantClient implements ClientModInitializer {
             }
         });
 
-        // PROFESSIONAL HIT-TRIGGERED SYSTEM (UUID-Based Target Tracking)
         AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.player == null || !toggleState || client.getNetworkHandler() == null) return ActionResult.PASS;
@@ -125,16 +122,13 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (entity instanceof PlayerEntity targetPlayer) {
                 if (targetPlayer == client.player) return ActionResult.PASS;
 
-                // SAFETY CHECK: Target already burning check (INTACT)
                 if (targetPlayer.isOnFire()) {
                     return ActionResult.PASS;
                 }
 
-                // Range Check (Max 4 blocks squared = 16.0)
                 double distSq = client.player.squaredDistanceTo(targetPlayer);
                 if (distSq > 16.0) return ActionResult.PASS;
 
-                // Target-Specific Hit Counter using UUID map
                 UUID targetUuid = targetPlayer.getUuid();
                 int currentHits = playerHitCounts.getOrDefault(targetUuid, 0) + 1;
                 
@@ -143,7 +137,6 @@ public class LavaAssistantClient implements ClientModInitializer {
                     return ActionResult.PASS;
                 }
 
-                // Reset hit count for this specific target once threshold is met
                 playerHitCounts.put(targetUuid, 0);
 
                 BlockPos pPos = targetPlayer.getBlockPos().down();
@@ -151,7 +144,6 @@ public class LavaAssistantClient implements ClientModInitializer {
                     return ActionResult.PASS;
                 }
 
-                // Line of Sight & Fluid/Solid Safety Checks
                 if (!hasLineOfSight(client, pPos)) return ActionResult.PASS;
                 if (client.world.getBlockState(pPos).isOf(net.minecraft.block.Blocks.WATER) || 
                     (!client.world.getBlockState(pPos).isAir() && !client.world.getBlockState(pPos).isOf(net.minecraft.block.Blocks.LAVA))) {
@@ -161,7 +153,6 @@ public class LavaAssistantClient implements ClientModInitializer {
                 targetPos = pPos;
                 silentLookAt(client, targetPos);
 
-                // Place Lava Packet
                 BlockPos supportPos = targetPos.down();
                 Vec3d hitVec = new Vec3d(supportPos.getX() + 0.5, supportPos.getY() + 1.0, supportPos.getZ() + 0.5);
                 BlockHitResult blockHitResult = new BlockHitResult(hitVec, Direction.UP, supportPos, false);
@@ -169,7 +160,6 @@ public class LavaAssistantClient implements ClientModInitializer {
                 client.getNetworkHandler().sendPacket(new PlayerInteractBlockC2SPacket(Hand.MAIN_HAND, blockHitResult, 0));
                 client.player.swingHand(Hand.MAIN_HAND);
 
-                // Move to State 1 to scoop it back shortly
                 state = 1;
                 timer = 0;
             }
@@ -177,7 +167,6 @@ public class LavaAssistantClient implements ClientModInitializer {
             return ActionResult.PASS;
         });
 
-        // Visual ESP Box Outline
         WorldRenderEvents.LAST.register(context -> {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.player == null || !toggleState || targetPos == null) return;
@@ -200,7 +189,6 @@ public class LavaAssistantClient implements ClientModInitializer {
             RenderSystem.disableBlend();
         });
 
-        // Toggle Status HUD Popup
         HudRenderCallback.EVENT.register((drawContext, tickDelta) -> {
             if (System.currentTimeMillis() < popupShowUntil) {
                 MinecraftClient client = MinecraftClient.getInstance();
