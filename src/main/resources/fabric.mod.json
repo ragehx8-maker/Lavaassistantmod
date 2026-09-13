@@ -1,24 +1,5 @@
-{
-  "schema_version": 1,
-  "id": "lavaassistant",
-  "version": "${version}",
-  "name": "Lava Assistant",
-  "description": "Automatically places and collects lava near enemies.",
-  "authors": [
-    "ragehx8-maker"
-  ],
-  "contact": {},
-  "license": "MIT",
-  "environment": "client",
-  "entrypoints": {
-    "client": [
-      "com.lavaassistant.LavaAssistantClient"
-    ]
-  },
-  "depends": {
-    "fabricloader": ">=0.18.4",
-    "minecraft": "1.21.11",
-    "java": ">=21",
-    "fabric-api": "*"
-  }
+"entrypoints": {
+  "client": [
+    "com.lavaassistant.LavaAssistantClient"
+  ]
 }
