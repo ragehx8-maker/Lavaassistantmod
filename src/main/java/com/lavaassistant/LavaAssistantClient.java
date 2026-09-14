@@ -18,7 +18,9 @@ import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.Random;
@@ -102,6 +104,10 @@ final class AutoLavaModule {
         boolean replaceable = world.getBlockState(clickedPos).isReplaceable();
         BlockPos placementPos = replaceable ? clickedPos : clickedPos.offset(hitResult.getSide());
 
+        if (!isSafePlacement(world, placementPos)) {
+            return ActionResult.PASS;
+        }
+
         targetLavaPos = placementPos;
         state = State.WAITING_FOR_LAVA;
         stateTicks = 0;
@@ -129,13 +135,14 @@ final class AutoLavaModule {
         } else if (state == State.WAITING_FOR_PICKUP) {
             handleAutoPickup(client);
         } else if (state == State.IDLE) {
+            // Aim-Assist style: Jab tak haath mein LAVA_BUCKET hai, yeh target lock karke place karega
             if (client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
-                handleAutoCombatPlacement(client);
+                handleAimAssistCombatPlacement(client);
             }
         }
     }
 
-    private static void handleAutoCombatPlacement(MinecraftClient client) {
+    private static void handleAimAssistCombatPlacement(MinecraftClient client) {
         PlayerEntity target = getNearestTargetPlayer(client);
         if (target == null) return;
 
@@ -146,21 +153,40 @@ final class AutoLavaModule {
         BlockPos lavaPos = target.getBlockPos();
         BlockPos supportPos = lavaPos.down();
 
-        if (!client.world.getBlockState(lavaPos).isReplaceable() || client.world.getBlockState(supportPos).isAir()) {
+        // Safety checks: Liquid ya unsafe block par lava nahi dalega
+        if (!isSafePlacement(client.world, lavaPos) || !client.world.getBlockState(supportPos).isOpaqueFullCube(client.world, supportPos)) {
             return;
         }
 
+        // Aim-assist smooth look rotation toward enemy's feet support block
         smoothLookAt(client, supportPos);
 
+        BlockHitResult hitResult = new BlockHitResult(
+                new Vec3d(supportPos.getX() + 0.5D, supportPos.getY() + 1.0D, supportPos.getZ() + 0.5D),
+                Direction.UP,
+                supportPos,
+                false
+        );
+
         if (client.interactionManager != null) {
-            client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
+            client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
         }
         client.player.swingHand(Hand.MAIN_HAND);
 
         targetLavaPos = lavaPos;
         state = State.WAITING_FOR_LAVA;
         stateTicks = 0;
-        cooldownTicks = 6 + RANDOM.nextInt(4);
+        cooldownTicks = 8 + RANDOM.nextInt(4);
+    }
+
+    private static boolean isSafePlacement(net.minecraft.world.World world, BlockPos pos) {
+        if (!world.getBlockState(pos).isReplaceable()) {
+            return false;
+        }
+        if (world.getFluidState(pos).getFluid() == Fluids.WATER || world.getFluidState(pos).getFluid() == Fluids.FLOWING_WATER) {
+            return false;
+        }
+        return true;
     }
 
     private static PlayerEntity getNearestTargetPlayer(MinecraftClient client) {
@@ -198,12 +224,14 @@ final class AutoLavaModule {
         double sensitivity = client.options.getMouseSensitivity().getValue() * 0.6D + 0.2D;
         double gcd = sensitivity * sensitivity * sensitivity * 1.2D;
 
-        // Natural micro-jitter added to completely break anti-cheat heuristic angle checks
         double jitterYaw = (RANDOM.nextDouble() - 0.5D) * 0.08D;
         double jitterPitch = (RANDOM.nextDouble() - 0.5D) * 0.08D;
 
         float finalYaw = (float) (currentYaw + Math.round(diffYaw / gcd) * gcd + jitterYaw);
         float finalPitch = (float) (currentPitch + Math.round(diffPitch / gcd) * gcd + jitterPitch);
+
+        client.player.setYaw(finalYaw);
+        client.player.setPitch(finalPitch);
 
         client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
                 client.player.getX(), client.player.getY(), client.player.getZ(),
