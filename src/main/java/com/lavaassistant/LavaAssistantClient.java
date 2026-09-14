@@ -3,6 +3,7 @@ package com.example.lavaassistant;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
@@ -12,10 +13,10 @@ import net.minecraft.item.Items;
 import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
 import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.text.Text;
+import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
@@ -37,11 +38,14 @@ public class LavaAssistantClient implements ClientModInitializer {
                 while (toggleKey.wasPressed()) {
                     AutoLavaModule.toggle();
                     String status = AutoLavaModule.toggled ? "§aON" : "§cOFF";
-                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fAuto Drain Pickup: " + status), true);
+                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fAuto Lava Pickup: " + status), true);
                 }
             }
             AutoLavaModule.onPlayerTick(client);
         });
+
+        // Jab bhi player khud lava bucket se lava place kare, isko detect karega
+        UseBlockCallback.EVENT.register(AutoLavaModule::onUseBlock);
     }
 }
 
@@ -53,19 +57,19 @@ final class AutoLavaModule {
 
     private enum State {
         IDLE,
+        WAITING_FOR_LAVA,
         WAITING_FOR_PICKUP
     }
 
     private static State state = State.IDLE;
-    private static BlockPos trackedLavaPos;
-    private static int originalSlot = -1;
+    private static BlockPos targetLavaPos;
+    private static int originalSlot = -1; // wo slot jahan lava bucket tha
     private static int stateTicks = 0;
     private static long nextActionTime = 0L;
 
-    private static final int PICKUP_DELAY_TICKS = 2;
-    private static final int TIMEOUT_TICKS = 25;
-    private static final long ACTION_DELAY_MS = 25L;
-    private static final int SCAN_RADIUS = 3;
+    private static final long ACTION_DELAY_MS = 150L;
+    private static final int PLACEMENT_TIMEOUT_TICKS = 20;
+    private static final int PICKUP_TIMEOUT_TICKS = 40;
 
     public static void toggle() {
         toggled = !toggled;
@@ -74,9 +78,41 @@ final class AutoLavaModule {
         }
     }
 
+    /**
+     * Ye tab fire hota hai jab player khud kisi block pe right-click karta hai.
+     * Hum sirf check karte hain: kya iske haath mein lava bucket hai?
+     * Agar haan, to hum future mein us jagah ka fluid track karenge.
+     */
+    public static ActionResult onUseBlock(net.minecraft.entity.player.PlayerEntity player,
+                                           net.minecraft.world.World world,
+                                           Hand hand,
+                                           BlockHitResult hitResult) {
+
+        if (!toggled || !world.isClient) return ActionResult.PASS;
+        if (hand != Hand.MAIN_HAND) return ActionResult.PASS;
+        if (state != State.IDLE) return ActionResult.PASS; // pehle se koi lava track ho raha hai
+
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player != player) return ActionResult.PASS; // sirf apna hi player
+
+        Item heldItem = player.getMainHandStack().getItem();
+        if (heldItem != Items.LAVA_BUCKET) return ActionResult.PASS;
+
+        BlockPos clickedPos = hitResult.getBlockPos();
+        boolean replaceable = world.getBlockState(clickedPos).isReplaceable();
+        BlockPos placementPos = replaceable ? clickedPos : clickedPos.offset(hitResult.getSide());
+
+        targetLavaPos = placementPos;
+        originalSlot = client.player.getInventory().selectedSlot; // lava bucket wala slot
+        state = State.WAITING_FOR_LAVA;
+        stateTicks = 0;
+        nextActionTime = System.currentTimeMillis() + ACTION_DELAY_MS;
+
+        return ActionResult.PASS; // normal placement hone do, hum sirf observe kar rahe hain
+    }
+
     public static void onPlayerTick(MinecraftClient client) {
         if (!toggled || client == null || client.player == null || client.world == null) {
-            resetState(client);
             return;
         }
 
@@ -89,69 +125,55 @@ final class AutoLavaModule {
             return;
         }
 
-        if (state == State.WAITING_FOR_PICKUP) {
-            handleDrainPickup(client);
-            return;
-        }
-
-        // Inventory check method fix kiya gaya hai taaki compile error na aaye
-        if (hasItemInInventory(client, Items.LAVA_BUCKET) || client.player.getMainHandStack().isOf(Items.BUCKET) || hasEmptyBucket(client)) {
-            BlockPos playerPos = client.player.getBlockPos();
-            
-            for (int x = -SCAN_RADIUS; x <= SCAN_RADIUS; x++) {
-                for (int y = -SCAN_RADIUS; y <= SCAN_RADIUS; y++) {
-                    for (int z = -SCAN_RADIUS; z <= SCAN_RADIUS; z++) {
-                        BlockPos checkPos = playerPos.add(x, y, z);
-                        
-                        if (client.world.getFluidState(checkPos).getFluid() == Fluids.LAVA) {
-                            trackedLavaPos = checkPos;
-                            originalSlot = client.player.getInventory().selectedSlot;
-                            state = State.WAITING_FOR_PICKUP;
-                            stateTicks = 0;
-                            nextActionTime = now + ACTION_DELAY_MS;
-                            return;
-                        }
-                    }
-                }
-            }
+        if (state == State.WAITING_FOR_LAVA) {
+            handleLavaPlacementCheck(client);
+        } else if (state == State.WAITING_FOR_PICKUP) {
+            handleAutoPickup(client);
         }
     }
 
-    private static boolean hasItemInInventory(MinecraftClient client, Item item) {
-        for (int i = 0; i < client.player.getInventory().size(); i++) {
-            if (client.player.getInventory().getStack(i).isOf(item)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean hasEmptyBucket(MinecraftClient client) {
-        return findItemInHotbar(client, Items.BUCKET) != -1;
-    }
-
-    private static void handleDrainPickup(MinecraftClient client) {
-        if (trackedLavaPos == null) {
-            resetState(client);
-            return;
-        }
-
+    private static void handleLavaPlacementCheck(MinecraftClient client) {
         stateTicks++;
-        if (stateTicks < PICKUP_DELAY_TICKS) {
+        if (targetLavaPos == null) {
+            resetState(client);
             return;
         }
 
-        boolean lavaExists = client.world.getFluidState(trackedLavaPos).getFluid() == Fluids.LAVA;
+        boolean lavaPlaced = client.world.getFluidState(targetLavaPos).getFluid() == Fluids.LAVA;
+
+        if (lavaPlaced) {
+            int bucketSlot = findItemInHotbar(client, Items.BUCKET);
+            if (bucketSlot == -1) {
+                // khali bucket hotbar mein nahi mila, auto-pickup cancel
+                client.player.sendMessage(Text.literal("§6[LavaAssistant] §cEmpty bucket nahi mila, pickup skip."), true);
+                resetState(client);
+                return;
+            }
+            selectHotbarSlot(client, bucketSlot);
+            state = State.WAITING_FOR_PICKUP;
+            stateTicks = 0;
+            nextActionTime = System.currentTimeMillis() + ACTION_DELAY_MS;
+        } else if (stateTicks > PLACEMENT_TIMEOUT_TICKS) {
+            // lava place nahi hua (misclick ya blocked), cancel karo
+            resetState(client);
+        }
+    }
+
+    private static void handleAutoPickup(MinecraftClient client) {
+        stateTicks++;
+        if (targetLavaPos == null || stateTicks > PICKUP_TIMEOUT_TICKS) {
+            resetState(client);
+            return;
+        }
+
+        boolean lavaExists = client.world.getFluidState(targetLavaPos).getFluid() == Fluids.LAVA;
         if (!lavaExists) {
+            // lava uth chuka hai, original slot wapas lao
             resetState(client);
             return;
         }
 
-        if (stateTicks > TIMEOUT_TICKS) {
-            resetState(client);
-            return;
-        }
-
+        // held item empty bucket hi hai ye confirm karo, warna packet bhejna galat hoga
         if (!client.player.getMainHandStack().isOf(Items.BUCKET)) {
             int bucketSlot = findItemInHotbar(client, Items.BUCKET);
             if (bucketSlot == -1) {
@@ -161,22 +183,14 @@ final class AutoLavaModule {
             selectHotbarSlot(client, bucketSlot);
         }
 
-        if (performDrainPickup(client, trackedLavaPos)) {
-            nextActionTime = System.currentTimeMillis() + 50L;
-        }
-    }
+        Vec3d hitPos = new Vec3d(targetLavaPos.getX() + 0.5D, targetLavaPos.getY() + 0.5D, targetLavaPos.getZ() + 0.5D);
+        BlockHitResult hitResult = new BlockHitResult(hitPos, net.minecraft.util.math.Direction.UP, targetLavaPos, false);
 
-    private static boolean performDrainPickup(MinecraftClient client, BlockPos lavaPos) {
-        if (client.player == null || client.getNetworkHandler() == null) return false;
-
-        Vec3d hitPos = new Vec3d(lavaPos.getX() + 0.5D, lavaPos.getY() + 0.5D, lavaPos.getZ() + 0.5D);
-        BlockHitResult hitResult = new BlockHitResult(hitPos, Direction.UP, lavaPos, false);
-        
-        // Sequence error ko hatane ke liye simple interact packet bheja gaya hai
-        client.getNetworkHandler().sendPacket(new PlayerInteractBlockC2SPacket(Hand.MAIN_HAND, hitResult, 0));
+        int sequence = client.world.getPendingUpdateManager().getNewSequence();
+        client.getNetworkHandler().sendPacket(new PlayerInteractBlockC2SPacket(Hand.MAIN_HAND, hitResult, sequence));
         client.player.swingHand(Hand.MAIN_HAND);
-        
-        return true;
+
+        nextActionTime = System.currentTimeMillis() + ACTION_DELAY_MS;
     }
 
     private static int findItemInHotbar(MinecraftClient client, Item item) {
@@ -205,7 +219,7 @@ final class AutoLavaModule {
             restoreOriginalSlot(client);
         }
         state = State.IDLE;
-        trackedLavaPos = null;
+        targetLavaPos = null;
         originalSlot = -1;
         stateTicks = 0;
         nextActionTime = 0L;
