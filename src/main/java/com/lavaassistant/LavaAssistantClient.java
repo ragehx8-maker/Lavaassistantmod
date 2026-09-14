@@ -3,7 +3,6 @@ package com.example.lavaassistant;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
@@ -14,12 +13,10 @@ import net.minecraft.item.Item;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.text.Text;
-import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
 import org.lwjgl.glfw.GLFW;
@@ -44,13 +41,11 @@ public class LavaAssistantClient implements ClientModInitializer {
                 while (toggleKey.wasPressed()) {
                     AutoLavaModule.toggle();
                     String status = AutoLavaModule.toggled ? "§aON" : "§cOFF";
-                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fUltimate Auto Lava: " + status), true);
+                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fUniversal Auto Lava: " + status), true);
                 }
             }
             AutoLavaModule.onPlayerTick(client);
         });
-
-        UseBlockCallback.EVENT.register(AutoLavaModule::onUseBlock);
     }
 }
 
@@ -59,24 +54,10 @@ final class AutoLavaModule {
     private AutoLavaModule() {}
 
     public static boolean toggled = false;
-
-    private enum State {
-        IDLE,
-        WAITING_FOR_LAVA,
-        WAITING_FOR_PICKUP
-    }
-
-    private static State state = State.IDLE;
-    private static BlockPos targetLavaPos;
-    private static int stateTicks = 0;
     private static int cooldownTicks = 0;
+    private static boolean hasAttemptedPlacement = false;
 
-    private static final int PLACEMENT_TIMEOUT_TICKS = 20;
-    private static final int PICKUP_TIMEOUT_TICKS = 40;
-    private static final int PICKUP_SETTLE_TICKS = 3;
-    private static final int PICKUP_RETRY_COOLDOWN = 5;
     private static final double MAX_COMBAT_RANGE_SQ = 20.0D;
-
     private static final Random RANDOM = new Random();
 
     public static void toggle() {
@@ -84,37 +65,6 @@ final class AutoLavaModule {
         if (!toggled) {
             resetState();
         }
-    }
-
-    public static ActionResult onUseBlock(PlayerEntity player,
-                                           net.minecraft.world.World world,
-                                           Hand hand,
-                                           BlockHitResult hitResult) {
-
-        if (!toggled || !world.isClient) return ActionResult.PASS;
-        if (hand != Hand.MAIN_HAND) return ActionResult.PASS;
-        if (state != State.IDLE) return ActionResult.PASS;
-
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != player) return ActionResult.PASS;
-
-        Item heldItem = player.getMainHandStack().getItem();
-        if (heldItem != Items.LAVA_BUCKET) return ActionResult.PASS;
-
-        BlockPos clickedPos = hitResult.getBlockPos();
-        boolean replaceable = world.getBlockState(clickedPos).isReplaceable();
-        BlockPos placementPos = replaceable ? clickedPos : clickedPos.offset(hitResult.getSide());
-
-        if (!isSafePlacement(world, placementPos)) {
-            return ActionResult.PASS;
-        }
-
-        targetLavaPos = placementPos;
-        state = State.WAITING_FOR_LAVA;
-        stateTicks = 0;
-        cooldownTicks = 0;
-
-        return ActionResult.PASS;
     }
 
     public static void onPlayerTick(MinecraftClient client) {
@@ -126,23 +76,35 @@ final class AutoLavaModule {
             return;
         }
 
+        // Agar player ne haath se lava bucket hata di hai, toh flag reset kar do
+        if (!client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
+            hasAttemptedPlacement = false;
+        }
+
         if (cooldownTicks > 0) {
             cooldownTicks--;
             return;
         }
 
-        if (state == State.WAITING_FOR_LAVA) {
-            handleLavaPlacementCheck(client);
-        } else if (state == State.WAITING_FOR_PICKUP) {
-            handleAutoPickup(client);
-        } else if (state == State.IDLE) {
-            if (client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
-                handleUltimateCombatPlacement(client);
+        Item heldItem = client.player.getMainHandStack().getItem();
+
+        // 1. Agar haath mein KHAALI BUCKET hai, toh kahin bhi rakha hua lava automatic utha lo
+        if (heldItem == Items.BUCKET) {
+            if (tryUniversalAutoPickup(client)) {
+                cooldownTicks = 6;
+                return;
+            }
+        }
+
+        // 2. Agar haath mein LAVA BUCKET hai, toh enemy ke pairon ke niche lava place karo
+        if (heldItem == Items.LAVA_BUCKET) {
+            if (!hasAttemptedPlacement) {
+                handleUniversalCombatPlacement(client);
             }
         }
     }
 
-    private static void handleUltimateCombatPlacement(MinecraftClient client) {
+    private static void handleUniversalCombatPlacement(MinecraftClient client) {
         PlayerEntity target = getNearestTargetPlayer(client);
         if (target == null) return;
 
@@ -155,31 +117,16 @@ final class AutoLavaModule {
             return;
         }
 
-        Vec3d predictedPos = target.getPos().add(target.getVelocity().multiply(1.0D));
-        BlockPos lavaPos = BlockPos.ofFloored(predictedPos);
+        BlockPos lavaPos = target.getBlockPos();
         BlockPos supportPos = lavaPos.down();
 
         if (!isSafePlacement(client.world, lavaPos) || !client.world.getBlockState(supportPos).isOpaqueFullCube(client.world, supportPos)) {
-            lavaPos = target.getBlockPos();
-            supportPos = lavaPos.down();
-            if (!isSafePlacement(client.world, lavaPos) || !client.world.getBlockState(supportPos).isOpaqueFullCube(client.world, supportPos)) {
-                return;
-            }
-        }
-
-        Vec3d eyePos = client.player.getEyePos();
-        Vec3d blockCenter = new Vec3d(supportPos.getX() + 0.5D, supportPos.getY() + 1.0D, supportPos.getZ() + 0.5D);
-        BlockHitResult raycastResult = client.world.raycast(new RaycastContext(
-                eyePos, blockCenter,
-                RaycastContext.ShapeType.COLLIDER,
-                RaycastContext.FluidHandling.NONE,
-                client.player
-        ));
-
-        if (raycastResult.getType() == BlockHitResult.Type.BLOCK && !raycastResult.getBlockPos().equals(supportPos)) {
             return;
         }
 
+        Vec3d blockCenter = new Vec3d(supportPos.getX() + 0.5D, supportPos.getY() + 1.0D, supportPos.getZ() + 0.5D);
+        
+        // Instant look sync taaki server placement ko turant accept kare
         setLookAndSync(client, supportPos);
 
         BlockHitResult hitResult = new BlockHitResult(
@@ -194,10 +141,44 @@ final class AutoLavaModule {
         }
         client.player.swingHand(Hand.MAIN_HAND);
 
-        targetLavaPos = lavaPos;
-        state = State.WAITING_FOR_LAVA;
-        stateTicks = 0;
-        cooldownTicks = 8 + RANDOM.nextInt(4);
+        hasAttemptedPlacement = true;
+        cooldownTicks = 12;
+    }
+
+    private static boolean tryUniversalAutoPickup(MinecraftClient client) {
+        BlockPos playerPos = client.player.getBlockPos();
+        int radius = 4;
+
+        // Aas-paas ke blocks ko scan karo ki kahan lava hai
+        for (int x = -radius; x <= radius; x++) {
+            for (int y = -2; y <= 2; y++) {
+                for (int z = -radius; z <= radius; z++) {
+                    BlockPos pos = playerPos.add(x, y, z);
+                    
+                    if (client.world.getFluidState(pos).getFluid() == Fluids.LAVA) {
+                        // Check karo ki range mein hai ya nahi
+                        if (client.player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) <= 25.0D) {
+                            
+                            setLookAndSync(client, pos);
+
+                            BlockHitResult pickupHit = new BlockHitResult(
+                                    new Vec3d(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D),
+                                    Direction.UP,
+                                    pos,
+                                    false
+                            );
+
+                            if (client.interactionManager != null) {
+                                client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, pickupHit);
+                            }
+                            client.player.swingHand(Hand.MAIN_HAND);
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private static boolean isSafePlacement(net.minecraft.world.World world, BlockPos pos) {
@@ -245,70 +226,8 @@ final class AutoLavaModule {
         ));
     }
 
-    private static void handleLavaPlacementCheck(MinecraftClient client) {
-        stateTicks++;
-        if (targetLavaPos == null) {
-            resetState();
-            return;
-        }
-
-        boolean lavaPlaced = client.world.getFluidState(targetLavaPos).getFluid() == Fluids.LAVA;
-
-        if (lavaPlaced) {
-            state = State.WAITING_FOR_PICKUP;
-            stateTicks = 0;
-            cooldownTicks = PICKUP_SETTLE_TICKS;
-        } else if (stateTicks > PLACEMENT_TIMEOUT_TICKS) {
-            resetState();
-        }
-    }
-
-    private static void handleAutoPickup(MinecraftClient client) {
-        stateTicks++;
-        if (targetLavaPos == null || stateTicks > PICKUP_TIMEOUT_TICKS) {
-            resetState();
-            return;
-        }
-
-        // Agar bucket mein lava wapas aa chuka hai, toh turant task khatam karo
-        if (client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
-            resetState();
-            return;
-        }
-
-        boolean lavaExists = client.world.getFluidState(targetLavaPos).getFluid() == Fluids.LAVA;
-        if (!lavaExists) {
-            resetState();
-            return;
-        }
-
-        if (!client.player.getMainHandStack().isOf(Items.BUCKET)) {
-            resetState();
-            return;
-        }
-
-        // Fix: Lava block ki taraf look sync karke proper interactBlock packet bhejo taaki server bucket mein lava bhar le
-        setLookAndSync(client, targetLavaPos);
-
-        BlockHitResult pickupHit = new BlockHitResult(
-                new Vec3d(targetLavaPos.getX() + 0.5D, targetLavaPos.getY() + 0.5D, targetLavaPos.getZ() + 0.5D),
-                Direction.UP,
-                targetLavaPos,
-                false
-        );
-
-        if (client.interactionManager != null) {
-            client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, pickupHit);
-        }
-        client.player.swingHand(Hand.MAIN_HAND);
-
-        cooldownTicks = PICKUP_RETRY_COOLDOWN + RANDOM.nextInt(2);
-    }
-
     public static void resetState() {
-        state = State.IDLE;
-        targetLavaPos = null;
-        stateTicks = 0;
         cooldownTicks = 0;
+        hasAttemptedPlacement = false;
     }
 }
