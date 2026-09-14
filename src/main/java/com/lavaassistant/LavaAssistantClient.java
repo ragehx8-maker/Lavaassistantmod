@@ -74,7 +74,7 @@ final class AutoLavaModule {
     private static final int PLACEMENT_TIMEOUT_TICKS = 20;
     private static final int PICKUP_TIMEOUT_TICKS = 40;
     private static final int PICKUP_SETTLE_TICKS = 3;
-    private static final int PICKUP_RETRY_COOLDOWN = 4;
+    private static final int PICKUP_RETRY_COOLDOWN = 5;
     private static final double MAX_COMBAT_RANGE_SQ = 20.0D;
 
     private static final Random RANDOM = new Random();
@@ -150,20 +150,16 @@ final class AutoLavaModule {
             return;
         }
 
-        // 1. Self-Damage Safety Guard: Agar dushman bohot paas hai aur humare paas Fire Resistance nahi hai, toh khud ko bachane ke liye pause karo
         double selfDistSq = client.player.squaredDistanceTo(target);
         if (selfDistSq < 6.0D && !client.player.hasStatusEffect(StatusEffects.FIRE_RESISTANCE)) {
             return;
         }
 
-        // 2. Smart Motion Prediction: Enemy ki velocity ke hisaab se aage ka position predict karo
-        Vec3d predictedPos = target.getPos().add(target.getVelocity().multiply(1.2D));
+        Vec3d predictedPos = target.getPos().add(target.getVelocity().multiply(1.0D));
         BlockPos lavaPos = BlockPos.ofFloored(predictedPos);
         BlockPos supportPos = lavaPos.down();
 
-        // Safety & Liquid Checks
         if (!isSafePlacement(client.world, lavaPos) || !client.world.getBlockState(supportPos).isOpaqueFullCube(client.world, supportPos)) {
-            // Fallback to exact feet pos if prediction spot is invalid
             lavaPos = target.getBlockPos();
             supportPos = lavaPos.down();
             if (!isSafePlacement(client.world, lavaPos) || !client.world.getBlockState(supportPos).isOpaqueFullCube(client.world, supportPos)) {
@@ -171,7 +167,6 @@ final class AutoLavaModule {
             }
         }
 
-        // 3. Line-of-Sight (Raycast) Check: Ensure diwar ya glass beech mein na ho
         Vec3d eyePos = client.player.getEyePos();
         Vec3d blockCenter = new Vec3d(supportPos.getX() + 0.5D, supportPos.getY() + 1.0D, supportPos.getZ() + 0.5D);
         BlockHitResult raycastResult = client.world.raycast(new RaycastContext(
@@ -182,11 +177,10 @@ final class AutoLavaModule {
         ));
 
         if (raycastResult.getType() == BlockHitResult.Type.BLOCK && !raycastResult.getBlockPos().equals(supportPos)) {
-            return; // Diwar beech mein hai, placement cancel
+            return;
         }
 
-        // Smooth Anti-Cheat Look Rotation with Micro-Jitter
-        smoothLookAt(client, supportPos);
+        setLookAndSync(client, supportPos);
 
         BlockHitResult hitResult = new BlockHitResult(
                 blockCenter,
@@ -233,7 +227,7 @@ final class AutoLavaModule {
         return nearest;
     }
 
-    private static void smoothLookAt(MinecraftClient client, BlockPos pos) {
+    private static void setLookAndSync(MinecraftClient client, BlockPos pos) {
         double dx = pos.getX() + 0.5D - client.player.getX();
         double dy = pos.getY() + 0.5D - client.player.getEyeY();
         double dz = pos.getZ() + 0.5D - client.player.getZ();
@@ -242,27 +236,12 @@ final class AutoLavaModule {
         float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0D);
         float targetPitch = (float) (-Math.toDegrees(Math.atan2(dy, distH)));
 
-        float currentYaw = client.player.getYaw();
-        float currentPitch = client.player.getPitch();
-
-        float diffYaw = MathHelper.wrapDegrees(targetYaw - currentYaw);
-        float diffPitch = targetPitch - currentPitch;
-
-        double sensitivity = client.options.getMouseSensitivity().getValue() * 0.6D + 0.2D;
-        double gcd = sensitivity * sensitivity * sensitivity * 1.2D;
-
-        double jitterYaw = (RANDOM.nextDouble() - 0.5D) * 0.08D;
-        double jitterPitch = (RANDOM.nextDouble() - 0.5D) * 0.08D;
-
-        float finalYaw = (float) (currentYaw + Math.round(diffYaw / gcd) * gcd + jitterYaw);
-        float finalPitch = (float) (currentPitch + Math.round(diffPitch / gcd) * gcd + jitterPitch);
-
-        client.player.setYaw(finalYaw);
-        client.player.setPitch(finalPitch);
+        client.player.setYaw(targetYaw);
+        client.player.setPitch(targetPitch);
 
         client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
                 client.player.getX(), client.player.getY(), client.player.getZ(),
-                finalYaw, finalPitch, client.player.isOnGround()
+                targetYaw, targetPitch, client.player.isOnGround()
         ));
     }
 
@@ -291,6 +270,12 @@ final class AutoLavaModule {
             return;
         }
 
+        // Agar bucket mein lava wapas aa chuka hai, toh turant task khatam karo
+        if (client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
+            resetState();
+            return;
+        }
+
         boolean lavaExists = client.world.getFluidState(targetLavaPos).getFluid() == Fluids.LAVA;
         if (!lavaExists) {
             resetState();
@@ -302,8 +287,18 @@ final class AutoLavaModule {
             return;
         }
 
+        // Fix: Lava block ki taraf look sync karke proper interactBlock packet bhejo taaki server bucket mein lava bhar le
+        setLookAndSync(client, targetLavaPos);
+
+        BlockHitResult pickupHit = new BlockHitResult(
+                new Vec3d(targetLavaPos.getX() + 0.5D, targetLavaPos.getY() + 0.5D, targetLavaPos.getZ() + 0.5D),
+                Direction.UP,
+                targetLavaPos,
+                false
+        );
+
         if (client.interactionManager != null) {
-            client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
+            client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, pickupHit);
         }
         client.player.swingHand(Hand.MAIN_HAND);
 
