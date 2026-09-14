@@ -21,6 +21,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.RaycastContext;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.Random;
@@ -43,7 +44,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 while (toggleKey.wasPressed()) {
                     AutoLavaModule.toggle();
                     String status = AutoLavaModule.toggled ? "§aON" : "§cOFF";
-                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fAuto Lava Assistant: " + status), true);
+                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fUltimate Auto Lava: " + status), true);
                 }
             }
             AutoLavaModule.onPlayerTick(client);
@@ -135,14 +136,13 @@ final class AutoLavaModule {
         } else if (state == State.WAITING_FOR_PICKUP) {
             handleAutoPickup(client);
         } else if (state == State.IDLE) {
-            // Aim-Assist style: Jab tak haath mein LAVA_BUCKET hai, yeh target lock karke place karega
             if (client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
-                handleAimAssistCombatPlacement(client);
+                handleUltimateCombatPlacement(client);
             }
         }
     }
 
-    private static void handleAimAssistCombatPlacement(MinecraftClient client) {
+    private static void handleUltimateCombatPlacement(MinecraftClient client) {
         PlayerEntity target = getNearestTargetPlayer(client);
         if (target == null) return;
 
@@ -150,19 +150,46 @@ final class AutoLavaModule {
             return;
         }
 
-        BlockPos lavaPos = target.getBlockPos();
-        BlockPos supportPos = lavaPos.down();
-
-        // Safety checks: Liquid ya unsafe block par lava nahi dalega
-        if (!isSafePlacement(client.world, lavaPos) || !client.world.getBlockState(supportPos).isOpaqueFullCube(client.world, supportPos)) {
+        // 1. Self-Damage Safety Guard: Agar dushman bohot paas hai aur humare paas Fire Resistance nahi hai, toh khud ko bachane ke liye pause karo
+        double selfDistSq = client.player.squaredDistanceTo(target);
+        if (selfDistSq < 6.0D && !client.player.hasStatusEffect(StatusEffects.FIRE_RESISTANCE)) {
             return;
         }
 
-        // Aim-assist smooth look rotation toward enemy's feet support block
+        // 2. Smart Motion Prediction: Enemy ki velocity ke hisaab se aage ka position predict karo
+        Vec3d predictedPos = target.getPos().add(target.getVelocity().multiply(1.2D));
+        BlockPos lavaPos = BlockPos.ofFloored(predictedPos);
+        BlockPos supportPos = lavaPos.down();
+
+        // Safety & Liquid Checks
+        if (!isSafePlacement(client.world, lavaPos) || !client.world.getBlockState(supportPos).isOpaqueFullCube(client.world, supportPos)) {
+            // Fallback to exact feet pos if prediction spot is invalid
+            lavaPos = target.getBlockPos();
+            supportPos = lavaPos.down();
+            if (!isSafePlacement(client.world, lavaPos) || !client.world.getBlockState(supportPos).isOpaqueFullCube(client.world, supportPos)) {
+                return;
+            }
+        }
+
+        // 3. Line-of-Sight (Raycast) Check: Ensure diwar ya glass beech mein na ho
+        Vec3d eyePos = client.player.getEyePos();
+        Vec3d blockCenter = new Vec3d(supportPos.getX() + 0.5D, supportPos.getY() + 1.0D, supportPos.getZ() + 0.5D);
+        BlockHitResult raycastResult = client.world.raycast(new RaycastContext(
+                eyePos, blockCenter,
+                RaycastContext.ShapeType.COLLIDER,
+                RaycastContext.FluidHandling.NONE,
+                client.player
+        ));
+
+        if (raycastResult.getType() == BlockHitResult.Type.BLOCK && !raycastResult.getBlockPos().equals(supportPos)) {
+            return; // Diwar beech mein hai, placement cancel
+        }
+
+        // Smooth Anti-Cheat Look Rotation with Micro-Jitter
         smoothLookAt(client, supportPos);
 
         BlockHitResult hitResult = new BlockHitResult(
-                new Vec3d(supportPos.getX() + 0.5D, supportPos.getY() + 1.0D, supportPos.getZ() + 0.5D),
+                blockCenter,
                 Direction.UP,
                 supportPos,
                 false
