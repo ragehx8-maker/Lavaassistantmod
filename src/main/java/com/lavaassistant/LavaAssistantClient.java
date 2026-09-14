@@ -1,4 +1,4 @@
-package com.lavaassistant;
+package com.example.lavaassistant;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -363,4 +363,4 @@ final class AutoLavaModule {
         pickupAttempts = 0;
         nextActionTime = 0L;
     }
-                                 }
+            }
