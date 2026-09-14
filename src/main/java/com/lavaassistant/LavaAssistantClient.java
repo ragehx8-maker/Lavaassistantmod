@@ -10,7 +10,6 @@ import net.minecraft.client.util.InputUtil;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
-import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
 import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
@@ -186,8 +185,12 @@ final class AutoLavaModule {
         Vec3d hitPos = new Vec3d(targetLavaPos.getX() + 0.5D, targetLavaPos.getY() + 0.5D, targetLavaPos.getZ() + 0.5D);
         BlockHitResult hitResult = new BlockHitResult(hitPos, net.minecraft.util.math.Direction.UP, targetLavaPos, false);
 
-        int sequence = client.world.getPendingUpdateManager().getNewSequence();
-        client.getNetworkHandler().sendPacket(new PlayerInteractBlockC2SPacket(Hand.MAIN_HAND, hitResult, sequence));
+        // interactionManager.interactBlock() vanilla client ka public method hai —
+        // ye khud sequence number generate karta hai aur packet bhejta hai, isliye
+        // humein getPendingUpdateManager() jaisa package-private access nahi chahiye.
+        if (client.interactionManager != null) {
+            client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
+        }
         client.player.swingHand(Hand.MAIN_HAND);
 
         nextActionTime = System.currentTimeMillis() + ACTION_DELAY_MS;
