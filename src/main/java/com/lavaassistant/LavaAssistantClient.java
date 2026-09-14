@@ -4,12 +4,8 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.PlayerListEntry;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.effect.StatusEffects;
-import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
@@ -19,12 +15,10 @@ import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.RaycastContext;
 import org.lwjgl.glfw.GLFW;
 
 public class LavaAssistantClient implements ClientModInitializer {
@@ -45,7 +39,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 while (toggleKey.wasPressed()) {
                     AutoLavaModule.toggle();
                     String status = AutoLavaModule.toggled ? "§aON" : "§cOFF";
-                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fAuto Lava: " + status), true);
+                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fAuto Pickup: " + status), true);
                 }
             }
             AutoLavaModule.onPlayerTick(client);
@@ -61,25 +55,18 @@ final class AutoLavaModule {
 
     private enum State {
         IDLE,
-        WAITING_FOR_LAVA,
         WAITING_FOR_PICKUP
     }
 
     private static State state = State.IDLE;
-
-    private static BlockPos placedLavaPos;
+    private static BlockPos trackedLavaPos;
     private static int originalSlot = -1;
     private static int stateTicks = 0;
-    private static int pickupAttempts = 0;
     private static long nextActionTime = 0L;
 
-    private static final int PICKUP_DELAY_TICKS = 6;
-    private static final int CONFIRM_TIMEOUT_TICKS = 20;
-    private static final int MAX_PICKUP_ATTEMPTS = 2;
-
-    private static final double MAX_RANGE_SQUARED = 36.0D;
-    private static final double MIN_SELF_DISTANCE_SQUARED = 9.0D;
-    private static final long ACTION_DELAY_MS = 100L;
+    private static final int PICKUP_DELAY_TICKS = 5;
+    private static final int TIMEOUT_TICKS = 30;
+    private static final long ACTION_DELAY_MS = 50L;
 
     public static void toggle() {
         toggled = !toggled;
@@ -103,172 +90,68 @@ final class AutoLavaModule {
             return;
         }
 
-        if (state == State.WAITING_FOR_LAVA) {
-            handleLavaPickup(client);
-            return;
-        }
-
+        // Agar hum pickup state mein hain toh use handle karo
         if (state == State.WAITING_FOR_PICKUP) {
-            handlePickupConfirmation(client);
+            handlePickup(client);
             return;
         }
 
-        if (!client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
-            return;
+        // IDLE state mein check karo ki kya player ne abhi crosshair ke samne block par lava place kiya hai
+        if (client.player.getMainHandStack().isOf(Items.BUCKET)) {
+            HitResult hit = client.crosshairTarget;
+            if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
+                BlockHitResult blockHit = (BlockHitResult) hit;
+                BlockPos neighborPos = blockHit.getBlockPos().offset(blockHit.getSide());
+                
+                // Agar us position par fluid state LAVA ban chuki hai, toh track karna shuru karo
+                if (client.world.getFluidState(neighborPos).getFluid() == Fluids.LAVA) {
+                    trackedLavaPos = neighborPos;
+                    originalSlot = client.player.getInventory().selectedSlot;
+                    state = State.WAITING_FOR_PICKUP;
+                    stateTicks = 0;
+                    nextActionTime = now + ACTION_DELAY_MS;
+                }
+            }
         }
-
-        Entity target = getTargetEntity(client);
-        if (!(target instanceof PlayerEntity targetPlayer)) {
-            return;
-        }
-
-        if (!isValidTarget(client, targetPlayer)) {
-            return;
-        }
-
-        if (targetPlayer.isOnFire()) {
-            return;
-        }
-
-        if (targetPlayer.hasStatusEffect(StatusEffects.FIRE_RESISTANCE)) {
-            return;
-        }
-
-        int predictionTicks = getDynamicPredictionTicks(client, targetPlayer);
-
-        Vec3d predictedPosition = targetPlayer
-                .getPos()
-                .add(targetPlayer.getVelocity().multiply(predictionTicks));
-
-        BlockPos lavaPos = BlockPos.ofFloored(predictedPosition);
-        BlockPos supportPos = lavaPos.down();
-
-        if (!isValidPlacement(client, lavaPos, supportPos)) {
-            return;
-        }
-
-        if (!isValidRaycast(client, supportPos)) {
-            return;
-        }
-
-        originalSlot = client.player.getInventory().selectedSlot;
-
-        if (!performPlacement(client, supportPos)) {
-            resetState(client);
-            return;
-        }
-
-        placedLavaPos = lavaPos;
-        state = State.WAITING_FOR_LAVA;
-        stateTicks = 0;
-        pickupAttempts = 0;
-        nextActionTime = now + ACTION_DELAY_MS;
     }
 
-    private static boolean isValidTarget(MinecraftClient client, PlayerEntity target) {
-        if (target == client.player) return false;
-        if (!target.isAlive() || target.isSpectator()) return false;
-        if (target.isTeammate(client.player)) return false;
-
-        return client.player.squaredDistanceTo(target) <= MAX_RANGE_SQUARED;
-    }
-
-    private static int getDynamicPredictionTicks(MinecraftClient client, PlayerEntity target) {
-        if (client.getNetworkHandler() == null) return 2;
-        PlayerListEntry entry = client.getNetworkHandler().getPlayerListEntry(client.player.getUuid());
-        if (entry == null) return 2;
-        
-        int ping = entry.getLatency();
-        if (ping > 150) return 3;
-        if (ping > 250) return 4;
-        return 2;
-    }
-
-    private static boolean isValidPlacement(MinecraftClient client, BlockPos lavaPos, BlockPos supportPos) {
-        if (!client.world.getBlockState(lavaPos).isReplaceable()) return false;
-        if (client.world.getBlockState(supportPos).isAir()) return false;
-        if (client.world.getFluidState(lavaPos).getFluid() == Fluids.LAVA) return false;
-
-        Vec3d lavaCenter = Vec3d.ofCenter(lavaPos);
-        if (client.player.getPos().squaredDistanceTo(lavaCenter) < MIN_SELF_DISTANCE_SQUARED) {
-            return false;
-        }
-
-        return true;
-    }
-
-    private static Entity getTargetEntity(MinecraftClient client) {
-        HitResult hit = client.crosshairTarget;
-        if (hit == null || hit.getType() != HitResult.Type.ENTITY) return null;
-        return ((EntityHitResult) hit).getEntity();
-    }
-
-    private static boolean isValidRaycast(MinecraftClient client, BlockPos supportPos) {
-        Vec3d eyePos = client.player.getEyePos();
-        Vec3d topFaceCenter = new Vec3d(supportPos.getX() + 0.5D, supportPos.getY() + 1.0D, supportPos.getZ() + 0.5D);
-
-        BlockHitResult result = client.world.raycast(new RaycastContext(
-                eyePos, topFaceCenter,
-                RaycastContext.ShapeType.COLLIDER,
-                RaycastContext.FluidHandling.NONE,
-                client.player
-        ));
-
-        return result.getType() == HitResult.Type.BLOCK && result.getBlockPos().equals(supportPos);
-    }
-
-    private static boolean performPlacement(MinecraftClient client, BlockPos supportPos) {
-        if (client.player == null || client.interactionManager == null || client.getNetworkHandler() == null) return false;
-
-        Vec3d hitPos = new Vec3d(supportPos.getX() + 0.5D, supportPos.getY() + 1.0D, supportPos.getZ() + 0.5D);
-        sendSilentLook(client, hitPos);
-
-        BlockHitResult hitResult = new BlockHitResult(hitPos, Direction.UP, supportPos, false);
-        ActionResult result = client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
-
-        if (!result.isAccepted()) return false;
-
-        client.player.swingHand(Hand.MAIN_HAND);
-        return true;
-    }
-
-    private static void handleLavaPickup(MinecraftClient client) {
-        if (placedLavaPos == null) {
+    private static void handlePickup(MinecraftClient client) {
+        if (trackedLavaPos == null) {
             resetState(client);
             return;
         }
 
         stateTicks++;
-        if (stateTicks < PICKUP_DELAY_TICKS) return;
-
-        boolean lavaExists = client.world.getFluidState(placedLavaPos).getFluid() == Fluids.LAVA;
-        if (!lavaExists) {
-            if (stateTicks >= CONFIRM_TIMEOUT_TICKS) resetState(client);
+        if (stateTicks < PICKUP_DELAY_TICKS) {
             return;
         }
 
+        // Check karo ki lava abhi bhi wahan hai ya nahi
+        boolean lavaExists = client.world.getFluidState(trackedLavaPos).getFluid() == Fluids.LAVA;
+        if (!lavaExists) {
+            resetState(client);
+            return;
+        }
+
+        if (stateTicks > TIMEOUT_TICKS) {
+            resetState(client);
+            return;
+        }
+
+        // Agar main hand mein empty bucket nahi hai, toh hotbar se dhundh kar select karo
         if (!client.player.getMainHandStack().isOf(Items.BUCKET)) {
             int bucketSlot = findItemInHotbar(client, Items.BUCKET);
             if (bucketSlot == -1) {
-                if (stateTicks >= CONFIRM_TIMEOUT_TICKS) resetState(client);
+                resetState(client);
                 return;
             }
             selectHotbarSlot(client, bucketSlot);
         }
 
-        if (!performPickup(client, placedLavaPos)) {
-            if (pickupAttempts >= MAX_PICKUP_ATTEMPTS) {
-                resetState(client);
-                return;
-            }
-            pickupAttempts++;
-            nextActionTime = System.currentTimeMillis() + ACTION_DELAY_MS;
-            return;
+        // Lava uthane ke liye interact packet bhejo
+        if (performPickup(client, trackedLavaPos)) {
+            nextActionTime = System.currentTimeMillis() + 150L;
         }
-
-        state = State.WAITING_FOR_PICKUP;
-        stateTicks = 0;
-        nextActionTime = System.currentTimeMillis() + ACTION_DELAY_MS;
     }
 
     private static boolean performPickup(MinecraftClient client, BlockPos lavaPos) {
@@ -284,35 +167,6 @@ final class AutoLavaModule {
 
         client.player.swingHand(Hand.MAIN_HAND);
         return true;
-    }
-
-    private static void handlePickupConfirmation(MinecraftClient client) {
-        if (placedLavaPos == null) {
-            resetState(client);
-            return;
-        }
-
-        stateTicks++;
-        boolean lavaStillExists = client.world.getFluidState(placedLavaPos).getFluid() == Fluids.LAVA;
-
-        if (!lavaStillExists) {
-            restoreOriginalSlot(client);
-            resetState(client);
-            return;
-        }
-
-        if (stateTicks >= 5 && pickupAttempts < MAX_PICKUP_ATTEMPTS) {
-            pickupAttempts++;
-            state = State.WAITING_FOR_LAVA;
-            stateTicks = PICKUP_DELAY_TICKS;
-            nextActionTime = System.currentTimeMillis() + ACTION_DELAY_MS;
-            return;
-        }
-
-        if (stateTicks >= CONFIRM_TIMEOUT_TICKS) {
-            restoreOriginalSlot(client);
-            resetState(client);
-        }
     }
 
     private static void sendSilentLook(MinecraftClient client, Vec3d target) {
@@ -358,10 +212,9 @@ final class AutoLavaModule {
             restoreOriginalSlot(client);
         }
         state = State.IDLE;
-        placedLavaPos = null;
+        trackedLavaPos = null;
         originalSlot = -1;
         stateTicks = 0;
-        pickupAttempts = 0;
         nextActionTime = 0L;
     }
-                                                                      }
+}
