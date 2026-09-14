@@ -13,14 +13,12 @@ import net.minecraft.fluid.Fluids;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
-import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.Random;
@@ -43,7 +41,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 while (toggleKey.wasPressed()) {
                     AutoLavaModule.toggle();
                     String status = AutoLavaModule.toggled ? "§aON" : "§cOFF";
-                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fAdvanced Auto Lava: " + status), true);
+                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fAuto Lava Assistant: " + status), true);
                 }
             }
             AutoLavaModule.onPlayerTick(client);
@@ -67,7 +65,6 @@ final class AutoLavaModule {
 
     private static State state = State.IDLE;
     private static BlockPos targetLavaPos;
-    private static int originalSlot = -1;
     private static int stateTicks = 0;
     private static int cooldownTicks = 0;
 
@@ -82,11 +79,11 @@ final class AutoLavaModule {
     public static void toggle() {
         toggled = !toggled;
         if (!toggled) {
-            resetState(MinecraftClient.getInstance());
+            resetState();
         }
     }
 
-    public static ActionResult onUseBlock(net.minecraft.entity.player.PlayerEntity player,
+    public static ActionResult onUseBlock(PlayerEntity player,
                                            net.minecraft.world.World world,
                                            Hand hand,
                                            BlockHitResult hitResult) {
@@ -106,7 +103,6 @@ final class AutoLavaModule {
         BlockPos placementPos = replaceable ? clickedPos : clickedPos.offset(hitResult.getSide());
 
         targetLavaPos = placementPos;
-        originalSlot = client.player.getInventory().selectedSlot;
         state = State.WAITING_FOR_LAVA;
         stateTicks = 0;
         cooldownTicks = 0;
@@ -133,7 +129,9 @@ final class AutoLavaModule {
         } else if (state == State.WAITING_FOR_PICKUP) {
             handleAutoPickup(client);
         } else if (state == State.IDLE) {
-            handleAutoCombatPlacement(client);
+            if (client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
+                handleAutoCombatPlacement(client);
+            }
         }
     }
 
@@ -145,21 +143,14 @@ final class AutoLavaModule {
             return;
         }
 
-        Vec3d predictedPos = target.getPos().add(target.getVelocity().multiply(1.5D));
-        BlockPos lavaPos = BlockPos.ofFloored(predictedPos);
+        BlockPos lavaPos = target.getBlockPos();
         BlockPos supportPos = lavaPos.down();
 
         if (!client.world.getBlockState(lavaPos).isReplaceable() || client.world.getBlockState(supportPos).isAir()) {
             return;
         }
 
-        int lavaSlot = findItemInHotbar(client, Items.LAVA_BUCKET);
-        if (lavaSlot == -1) return;
-
         smoothLookAt(client, supportPos);
-
-        originalSlot = client.player.getInventory().selectedSlot;
-        selectHotbarSlot(client, lavaSlot);
 
         if (client.interactionManager != null) {
             client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
@@ -201,15 +192,18 @@ final class AutoLavaModule {
         float currentYaw = client.player.getYaw();
         float currentPitch = client.player.getPitch();
 
-        // Fix applied here: using MathHelper instead of Math
         float diffYaw = MathHelper.wrapDegrees(targetYaw - currentYaw);
         float diffPitch = targetPitch - currentPitch;
 
         double sensitivity = client.options.getMouseSensitivity().getValue() * 0.6D + 0.2D;
         double gcd = sensitivity * sensitivity * sensitivity * 1.2D;
 
-        float finalYaw = (float) (currentYaw + Math.round(diffYaw / gcd) * gcd);
-        float finalPitch = (float) (currentPitch + Math.round(diffPitch / gcd) * gcd);
+        // Natural micro-jitter added to completely break anti-cheat heuristic angle checks
+        double jitterYaw = (RANDOM.nextDouble() - 0.5D) * 0.08D;
+        double jitterPitch = (RANDOM.nextDouble() - 0.5D) * 0.08D;
+
+        float finalYaw = (float) (currentYaw + Math.round(diffYaw / gcd) * gcd + jitterYaw);
+        float finalPitch = (float) (currentPitch + Math.round(diffPitch / gcd) * gcd + jitterPitch);
 
         client.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
                 client.player.getX(), client.player.getY(), client.player.getZ(),
@@ -220,48 +214,37 @@ final class AutoLavaModule {
     private static void handleLavaPlacementCheck(MinecraftClient client) {
         stateTicks++;
         if (targetLavaPos == null) {
-            resetState(client);
+            resetState();
             return;
         }
 
         boolean lavaPlaced = client.world.getFluidState(targetLavaPos).getFluid() == Fluids.LAVA;
 
         if (lavaPlaced) {
-            int bucketSlot = findItemInHotbar(client, Items.BUCKET);
-            if (bucketSlot == -1) {
-                client.player.sendMessage(Text.literal("§6[LavaAssistant] §cEmpty bucket nahi mila, pickup skip."), true);
-                resetState(client);
-                return;
-            }
-            selectHotbarSlot(client, bucketSlot);
             state = State.WAITING_FOR_PICKUP;
             stateTicks = 0;
             cooldownTicks = PICKUP_SETTLE_TICKS;
         } else if (stateTicks > PLACEMENT_TIMEOUT_TICKS) {
-            resetState(client);
+            resetState();
         }
     }
 
     private static void handleAutoPickup(MinecraftClient client) {
         stateTicks++;
         if (targetLavaPos == null || stateTicks > PICKUP_TIMEOUT_TICKS) {
-            resetState(client);
+            resetState();
             return;
         }
 
         boolean lavaExists = client.world.getFluidState(targetLavaPos).getFluid() == Fluids.LAVA;
         if (!lavaExists) {
-            resetState(client);
+            resetState();
             return;
         }
 
         if (!client.player.getMainHandStack().isOf(Items.BUCKET)) {
-            int bucketSlot = findItemInHotbar(client, Items.BUCKET);
-            if (bucketSlot == -1) {
-                resetState(client);
-                return;
-            }
-            selectHotbarSlot(client, bucketSlot);
+            resetState();
+            return;
         }
 
         if (client.interactionManager != null) {
@@ -272,34 +255,9 @@ final class AutoLavaModule {
         cooldownTicks = PICKUP_RETRY_COOLDOWN + RANDOM.nextInt(2);
     }
 
-    private static int findItemInHotbar(MinecraftClient client, Item item) {
-        for (int slot = 0; slot < 9; slot++) {
-            if (client.player.getInventory().getStack(slot).isOf(item)) {
-                return slot;
-            }
-        }
-        return -1;
-    }
-
-    private static void selectHotbarSlot(MinecraftClient client, int slot) {
-        if (slot < 0 || slot > 8) return;
-        client.player.getInventory().selectedSlot = slot;
-        client.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(slot));
-    }
-
-    private static void restoreOriginalSlot(MinecraftClient client) {
-        if (originalSlot >= 0 && originalSlot <= 8 && client.player != null) {
-            selectHotbarSlot(client, originalSlot);
-        }
-    }
-
-    public static void resetState(MinecraftClient client) {
-        if (client != null && client.player != null) {
-            restoreOriginalSlot(client);
-        }
+    public static void resetState() {
         state = State.IDLE;
         targetLavaPos = null;
-        originalSlot = -1;
         stateTicks = 0;
         cooldownTicks = 0;
     }
