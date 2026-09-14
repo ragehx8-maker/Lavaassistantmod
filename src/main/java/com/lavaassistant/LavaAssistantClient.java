@@ -6,7 +6,6 @@ import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
-import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.Item;
@@ -18,7 +17,6 @@ import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.RaycastContext;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.Random;
@@ -41,7 +39,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 while (toggleKey.wasPressed()) {
                     AutoLavaModule.toggle();
                     String status = AutoLavaModule.toggled ? "§aON" : "§cOFF";
-                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fUniversal Auto Lava: " + status), true);
+                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §f1.21.1 Auto Lava: " + status), true);
                 }
             }
             AutoLavaModule.onPlayerTick(client);
@@ -88,10 +86,10 @@ final class AutoLavaModule {
 
         Item heldItem = client.player.getMainHandStack().getItem();
 
-        // 1. Agar haath mein KHAALI BUCKET hai, toh kahin bhi rakha hua lava automatic utha lo
+        // 1. Agar haath mein KHAALI BUCKET hai, toh aas-paas ke lava ko turant utha lo
         if (heldItem == Items.BUCKET) {
             if (tryUniversalAutoPickup(client)) {
-                cooldownTicks = 6;
+                cooldownTicks = 8;
                 return;
             }
         }
@@ -99,24 +97,25 @@ final class AutoLavaModule {
         // 2. Agar haath mein LAVA BUCKET hai, toh enemy ke pairon ke niche lava place karo
         if (heldItem == Items.LAVA_BUCKET) {
             if (!hasAttemptedPlacement) {
-                handleUniversalCombatPlacement(client);
+                handleCombatPlacement(client);
             }
         }
     }
 
-    private static void handleUniversalCombatPlacement(MinecraftClient client) {
+    private static void handleCombatPlacement(MinecraftClient client) {
         PlayerEntity target = getNearestTargetPlayer(client);
         if (target == null) return;
 
-        if (target.isOnFire() || target.hasStatusEffect(StatusEffects.FIRE_RESISTANCE)) {
+        if (target.isOnFire() || target.hasStatusEffect(net.minecraft.entity.effect.StatusEffects.FIRE_RESISTANCE)) {
             return;
         }
 
         double selfDistSq = client.player.squaredDistanceTo(target);
-        if (selfDistSq < 6.0D && !client.player.hasStatusEffect(StatusEffects.FIRE_RESISTANCE)) {
+        if (selfDistSq < 6.0D && !client.player.hasStatusEffect(net.minecraft.entity.effect.StatusEffects.FIRE_RESISTANCE)) {
             return;
         }
 
+        // Enemy ke theek pairon wala block aur uske niche ka support block
         BlockPos lavaPos = target.getBlockPos();
         BlockPos supportPos = lavaPos.down();
 
@@ -124,9 +123,10 @@ final class AutoLavaModule {
             return;
         }
 
+        // Exact center position support block ki
         Vec3d blockCenter = new Vec3d(supportPos.getX() + 0.5D, supportPos.getY() + 1.0D, supportPos.getZ() + 0.5D);
         
-        // Instant look sync taaki server placement ko turant accept kare
+        // Server ke sath look angle sync karo taaki aim 100% accurate lage
         setLookAndSync(client, supportPos);
 
         BlockHitResult hitResult = new BlockHitResult(
@@ -136,27 +136,27 @@ final class AutoLavaModule {
                 false
         );
 
+        // Minecraft 1.21.1 interaction trigger
         if (client.interactionManager != null) {
             client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
         }
         client.player.swingHand(Hand.MAIN_HAND);
 
         hasAttemptedPlacement = true;
-        cooldownTicks = 12;
+        cooldownTicks = 15;
     }
 
     private static boolean tryUniversalAutoPickup(MinecraftClient client) {
         BlockPos playerPos = client.player.getBlockPos();
         int radius = 4;
 
-        // Aas-paas ke blocks ko scan karo ki kahan lava hai
         for (int x = -radius; x <= radius; x++) {
             for (int y = -2; y <= 2; y++) {
                 for (int z = -radius; z <= radius; z++) {
                     BlockPos pos = playerPos.add(x, y, z);
                     
                     if (client.world.getFluidState(pos).getFluid() == Fluids.LAVA) {
-                        // Check karo ki range mein hai ya nahi
+                        // Check karo ki range ke andar hai ya nahi (approx 5 blocks radius)
                         if (client.player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) <= 25.0D) {
                             
                             setLookAndSync(client, pos);
