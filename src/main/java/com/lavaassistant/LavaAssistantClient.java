@@ -247,13 +247,14 @@ final class AutoLavaModule {
             return;
         }
 
-        int bucketSlot = findItemInHotbar(client, Items.BUCKET);
-        if (bucketSlot == -1) {
-            if (stateTicks >= CONFIRM_TIMEOUT_TICKS) resetState(client);
-            return;
+        if (!client.player.getMainHandStack().isOf(Items.BUCKET)) {
+            int bucketSlot = findItemInHotbar(client, Items.BUCKET);
+            if (bucketSlot == -1) {
+                if (stateTicks >= CONFIRM_TIMEOUT_TICKS) resetState(client);
+                return;
+            }
+            selectHotbarSlot(client, bucketSlot);
         }
-
-        selectHotbarSlot(client, bucketSlot);
 
         if (!performPickup(client, placedLavaPos)) {
             if (pickupAttempts >= MAX_PICKUP_ATTEMPTS) {
@@ -363,4 +364,4 @@ final class AutoLavaModule {
         pickupAttempts = 0;
         nextActionTime = 0L;
     }
-            }
+                                                                      }
