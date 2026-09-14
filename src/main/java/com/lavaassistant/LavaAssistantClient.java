@@ -35,7 +35,7 @@ public class LavaAssistantClient implements ClientModInitializer {
     public void onInitializeClient() {
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.lavaassistant.toggle",
-                InputUtil.Type.KEY_SYM,
+                InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_R,
                 "category.lavaassistant.general"
         ));
@@ -53,7 +53,6 @@ public class LavaAssistantClient implements ClientModInitializer {
     }
 }
 
-// Package-private module so it compiles in the same file without errors
 final class AutoLavaModule {
 
     private AutoLavaModule() {}
@@ -364,4 +363,4 @@ final class AutoLavaModule {
         pickupAttempts = 0;
         nextActionTime = 0L;
     }
-            }
+                                 }
