@@ -65,7 +65,7 @@ final class AutoLavaModule {
     private static final int PICKUP_DELAY_TICKS = 2;
     private static final int TIMEOUT_TICKS = 25;
     private static final long ACTION_DELAY_MS = 25L;
-    private static final int SCAN_RADIUS = 3; // Auto drain style radius check
+    private static final int SCAN_RADIUS = 3;
 
     public static void toggle() {
         toggled = !toggled;
@@ -94,8 +94,8 @@ final class AutoLavaModule {
             return;
         }
 
-        // Auto Drain style scanner: Player ke aas-paas radius mein check karo ki kya koi lava block hai
-        if (client.player.getInventory().contains(Items.LAVA_BUCKET) || client.player.getMainHandStack().isOf(Items.BUCKET) || hasEmptyBucket(client)) {
+        // Inventory check method fix kiya gaya hai taaki compile error na aaye
+        if (hasItemInInventory(client, Items.LAVA_BUCKET) || client.player.getMainHandStack().isOf(Items.BUCKET) || hasEmptyBucket(client)) {
             BlockPos playerPos = client.player.getBlockPos();
             
             for (int x = -SCAN_RADIUS; x <= SCAN_RADIUS; x++) {
@@ -103,7 +103,6 @@ final class AutoLavaModule {
                     for (int z = -SCAN_RADIUS; z <= SCAN_RADIUS; z++) {
                         BlockPos checkPos = playerPos.add(x, y, z);
                         
-                        // Agar range ke andar lava mil gaya
                         if (client.world.getFluidState(checkPos).getFluid() == Fluids.LAVA) {
                             trackedLavaPos = checkPos;
                             originalSlot = client.player.getInventory().selectedSlot;
@@ -116,6 +115,15 @@ final class AutoLavaModule {
                 }
             }
         }
+    }
+
+    private static boolean hasItemInInventory(MinecraftClient client, Item item) {
+        for (int i = 0; i < client.player.getInventory().size(); i++) {
+            if (client.player.getInventory().getStack(i).isOf(item)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean hasEmptyBucket(MinecraftClient client) {
@@ -164,8 +172,8 @@ final class AutoLavaModule {
         Vec3d hitPos = new Vec3d(lavaPos.getX() + 0.5D, lavaPos.getY() + 0.5D, lavaPos.getZ() + 0.5D);
         BlockHitResult hitResult = new BlockHitResult(hitPos, Direction.UP, lavaPos, false);
         
-        int sequence = client.world.getPendingUpdateManager().getNewSequence();
-        client.getNetworkHandler().sendPacket(new PlayerInteractBlockC2SPacket(Hand.MAIN_HAND, hitResult, sequence));
+        // Sequence error ko hatane ke liye simple interact packet bheja gaya hai
+        client.getNetworkHandler().sendPacket(new PlayerInteractBlockC2SPacket(Hand.MAIN_HAND, hitResult, 0));
         client.player.swingHand(Hand.MAIN_HAND);
         
         return true;
