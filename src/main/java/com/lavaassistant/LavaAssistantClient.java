@@ -19,6 +19,7 @@ import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
@@ -200,7 +201,8 @@ final class AutoLavaModule {
         float currentYaw = client.player.getYaw();
         float currentPitch = client.player.getPitch();
 
-        float diffYaw = Math.wrapDegrees(targetYaw - currentYaw);
+        // Fix applied here: using MathHelper instead of Math
+        float diffYaw = MathHelper.wrapDegrees(targetYaw - currentYaw);
         float diffPitch = targetPitch - currentPitch;
 
         double sensitivity = client.options.getMouseSensitivity().getValue() * 0.6D + 0.2D;
