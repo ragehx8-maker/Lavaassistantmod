@@ -16,7 +16,6 @@ import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
 public class LavaAssistantClient implements ClientModInitializer {
@@ -64,11 +63,11 @@ final class AutoLavaModule {
     private static BlockPos targetLavaPos;
     private static int originalSlot = -1; // wo slot jahan lava bucket tha
     private static int stateTicks = 0;
-    private static long nextActionTime = 0L;
+    private static int cooldownTicks = 0;
 
-    private static final long ACTION_DELAY_MS = 150L;
-    private static final int PLACEMENT_TIMEOUT_TICKS = 20;
-    private static final int PICKUP_TIMEOUT_TICKS = 40;
+    private static final int PLACEMENT_TIMEOUT_TICKS = 20;   // 1 second
+    private static final int PICKUP_TIMEOUT_TICKS = 30;       // 1.5 second
+    private static final int PICKUP_RETRY_COOLDOWN = 1;       // har tick try karega
 
     public static void toggle() {
         toggled = !toggled;
@@ -105,7 +104,7 @@ final class AutoLavaModule {
         originalSlot = client.player.getInventory().selectedSlot; // lava bucket wala slot
         state = State.WAITING_FOR_LAVA;
         stateTicks = 0;
-        nextActionTime = System.currentTimeMillis() + ACTION_DELAY_MS;
+        cooldownTicks = 0;
 
         return ActionResult.PASS; // normal placement hone do, hum sirf observe kar rahe hain
     }
@@ -119,8 +118,8 @@ final class AutoLavaModule {
             return;
         }
 
-        long now = System.currentTimeMillis();
-        if (now < nextActionTime) {
+        if (cooldownTicks > 0) {
+            cooldownTicks--;
             return;
         }
 
@@ -151,7 +150,7 @@ final class AutoLavaModule {
             selectHotbarSlot(client, bucketSlot);
             state = State.WAITING_FOR_PICKUP;
             stateTicks = 0;
-            nextActionTime = System.currentTimeMillis() + ACTION_DELAY_MS;
+            cooldownTicks = 0; // turant next tick pickup try karo, jab tak player abhi bhi wahi dekh raha ho
         } else if (stateTicks > PLACEMENT_TIMEOUT_TICKS) {
             // lava place nahi hua (misclick ya blocked), cancel karo
             resetState(client);
@@ -182,18 +181,17 @@ final class AutoLavaModule {
             selectHotbarSlot(client, bucketSlot);
         }
 
-        Vec3d hitPos = new Vec3d(targetLavaPos.getX() + 0.5D, targetLavaPos.getY() + 0.5D, targetLavaPos.getZ() + 0.5D);
-        BlockHitResult hitResult = new BlockHitResult(hitPos, net.minecraft.util.math.Direction.UP, targetLavaPos, false);
-
-        // interactionManager.interactBlock() vanilla client ka public method hai —
-        // ye khud sequence number generate karta hai aur packet bhejta hai, isliye
-        // humein getPendingUpdateManager() jaisa package-private access nahi chahiye.
+        // IMPORTANT: lava bucket se fluid uthana Item.use() codepath se hota hai
+        // (interactItem), jo khud player ki current look direction se raycast
+        // karta hai — hum koi custom BlockHitResult nahi bhej sakte iske liye.
+        // Isliye zaroori hai ki ye call turant ho, jab tak player ka camera
+        // abhi bhi wahi (jahan lava girega hai) point kar raha ho.
         if (client.interactionManager != null) {
-            client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
+            client.interactionManager.interactItem(client.player, Hand.MAIN_HAND);
         }
         client.player.swingHand(Hand.MAIN_HAND);
 
-        nextActionTime = System.currentTimeMillis() + ACTION_DELAY_MS;
+        cooldownTicks = PICKUP_RETRY_COOLDOWN;
     }
 
     private static int findItemInHotbar(MinecraftClient client, Item item) {
@@ -225,6 +223,6 @@ final class AutoLavaModule {
         targetLavaPos = null;
         originalSlot = -1;
         stateTicks = 0;
-        nextActionTime = 0L;
+        cooldownTicks = 0;
     }
 }
