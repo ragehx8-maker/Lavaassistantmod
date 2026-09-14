@@ -1,4 +1,4 @@
-package com.example.lavaassistant;
+package com.lavaassistant;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.PlayerListEntry;
@@ -40,7 +40,6 @@ public final class AutoLavaModule {
     private static int pickupAttempts = 0;
     private static long nextActionTime = 0L;
 
-    // Advanced Settings
     private static final int PICKUP_DELAY_TICKS = 6;
     private static final int CONFIRM_TIMEOUT_TICKS = 20;
     private static final int MAX_PICKUP_ATTEMPTS = 2;
@@ -102,7 +101,6 @@ public final class AutoLavaModule {
             return;
         }
 
-        // Dynamic Prediction Ticks based on Ping/Latency
         int predictionTicks = getDynamicPredictionTicks(client, targetPlayer);
 
         Vec3d predictedPosition = targetPlayer
@@ -137,8 +135,6 @@ public final class AutoLavaModule {
     private static boolean isValidTarget(MinecraftClient client, PlayerEntity target) {
         if (target == client.player) return false;
         if (!target.isAlive() || target.isSpectator()) return false;
-        
-        // Native Team/Friend Check (Agar teammate hai toh ignore karega)
         if (target.isTeammate(client.player)) return false;
 
         return client.player.squaredDistanceTo(target) <= MAX_RANGE_SQUARED;
@@ -150,7 +146,6 @@ public final class AutoLavaModule {
         if (entry == null) return 2;
         
         int ping = entry.getLatency();
-        // High ping hone par lookahead ticks badha do taaki prediction accurate rahe
         if (ping > 150) return 3;
         if (ping > 250) return 4;
         return 2;
