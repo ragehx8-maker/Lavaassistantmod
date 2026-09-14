@@ -1,7 +1,12 @@
 package com.lavaassistant;
 
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.PlayerListEntry;
+import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.player.PlayerEntity;
@@ -10,6 +15,7 @@ import net.minecraft.item.Item;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
+import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
@@ -19,8 +25,36 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
+import org.lwjgl.glfw.GLFW;
 
-public final class AutoLavaModule {
+public class LavaAssistantClient implements ClientModInitializer {
+
+    private static KeyBinding toggleKey;
+
+    @Override
+    public void onInitializeClient() {
+        toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.lavaassistant.toggle",
+                InputUtil.Type.KEY_SYM,
+                GLFW.GLFW_KEY_R,
+                "category.lavaassistant.general"
+        ));
+
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (client.player != null) {
+                while (toggleKey.wasPressed()) {
+                    AutoLavaModule.toggle();
+                    String status = AutoLavaModule.toggled ? "§aON" : "§cOFF";
+                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fAuto Lava: " + status), true);
+                }
+            }
+            AutoLavaModule.onPlayerTick(client);
+        });
+    }
+}
+
+// Package-private module so it compiles in the same file without errors
+final class AutoLavaModule {
 
     private AutoLavaModule() {}
 
@@ -330,4 +364,4 @@ public final class AutoLavaModule {
         pickupAttempts = 0;
         nextActionTime = 0L;
     }
-}
+            }
