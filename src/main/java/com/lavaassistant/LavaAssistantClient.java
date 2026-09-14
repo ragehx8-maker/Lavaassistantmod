@@ -9,12 +9,11 @@ import net.minecraft.client.util.InputUtil;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
+import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
 import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.text.Text;
-import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
@@ -38,7 +37,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 while (toggleKey.wasPressed()) {
                     AutoLavaModule.toggle();
                     String status = AutoLavaModule.toggled ? "§aON" : "§cOFF";
-                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fInstant Auto Pickup: " + status), true);
+                    client.player.sendMessage(Text.literal("§6[LavaAssistant] §fAuto Drain Pickup: " + status), true);
                 }
             }
             AutoLavaModule.onPlayerTick(client);
@@ -63,9 +62,10 @@ final class AutoLavaModule {
     private static int stateTicks = 0;
     private static long nextActionTime = 0L;
 
-    private static final int PICKUP_DELAY_TICKS = 2; // Turant uthane ke liye bahut kam delay
+    private static final int PICKUP_DELAY_TICKS = 2;
     private static final int TIMEOUT_TICKS = 25;
     private static final long ACTION_DELAY_MS = 25L;
+    private static final int SCAN_RADIUS = 3; // Auto drain style radius check
 
     public static void toggle() {
         toggled = !toggled;
@@ -90,29 +90,39 @@ final class AutoLavaModule {
         }
 
         if (state == State.WAITING_FOR_PICKUP) {
-            handleInstantPickup(client);
+            handleDrainPickup(client);
             return;
         }
 
-        // Jab player lava bucket pakad kar manually block par click karke lava place karega
-        if (client.player.getMainHandStack().isOf(Items.LAVA_BUCKET)) {
-            HitResult hit = client.crosshairTarget;
-            if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
-                BlockHitResult blockHit = (BlockHitResult) hit;
-                BlockPos neighborPos = blockHit.getBlockPos().offset(blockHit.getSide());
-                
-                if (client.world.getFluidState(neighborPos).getFluid() == Fluids.LAVA) {
-                    trackedLavaPos = neighborPos;
-                    originalSlot = client.player.getInventory().selectedSlot;
-                    state = State.WAITING_FOR_PICKUP;
-                    stateTicks = 0;
-                    nextActionTime = now + ACTION_DELAY_MS;
+        // Auto Drain style scanner: Player ke aas-paas radius mein check karo ki kya koi lava block hai
+        if (client.player.getInventory().contains(Items.LAVA_BUCKET) || client.player.getMainHandStack().isOf(Items.BUCKET) || hasEmptyBucket(client)) {
+            BlockPos playerPos = client.player.getBlockPos();
+            
+            for (int x = -SCAN_RADIUS; x <= SCAN_RADIUS; x++) {
+                for (int y = -SCAN_RADIUS; y <= SCAN_RADIUS; y++) {
+                    for (int z = -SCAN_RADIUS; z <= SCAN_RADIUS; z++) {
+                        BlockPos checkPos = playerPos.add(x, y, z);
+                        
+                        // Agar range ke andar lava mil gaya
+                        if (client.world.getFluidState(checkPos).getFluid() == Fluids.LAVA) {
+                            trackedLavaPos = checkPos;
+                            originalSlot = client.player.getInventory().selectedSlot;
+                            state = State.WAITING_FOR_PICKUP;
+                            stateTicks = 0;
+                            nextActionTime = now + ACTION_DELAY_MS;
+                            return;
+                        }
+                    }
                 }
             }
         }
     }
 
-    private static void handleInstantPickup(MinecraftClient client) {
+    private static boolean hasEmptyBucket(MinecraftClient client) {
+        return findItemInHotbar(client, Items.BUCKET) != -1;
+    }
+
+    private static void handleDrainPickup(MinecraftClient client) {
         if (trackedLavaPos == null) {
             resetState(client);
             return;
@@ -134,7 +144,6 @@ final class AutoLavaModule {
             return;
         }
 
-        // Agar haath mein khali bucket nahi hai, toh hotbar se switch karo
         if (!client.player.getMainHandStack().isOf(Items.BUCKET)) {
             int bucketSlot = findItemInHotbar(client, Items.BUCKET);
             if (bucketSlot == -1) {
@@ -144,23 +153,21 @@ final class AutoLavaModule {
             selectHotbarSlot(client, bucketSlot);
         }
 
-        // Bina kisi head movement packet ke direct interaction
-        if (performInstantPickup(client, trackedLavaPos)) {
+        if (performDrainPickup(client, trackedLavaPos)) {
             nextActionTime = System.currentTimeMillis() + 50L;
         }
     }
 
-    private static boolean performInstantPickup(MinecraftClient client, BlockPos lavaPos) {
-        if (client.player == null || client.interactionManager == null) return false;
+    private static boolean performDrainPickup(MinecraftClient client, BlockPos lavaPos) {
+        if (client.player == null || client.getNetworkHandler() == null) return false;
 
         Vec3d hitPos = new Vec3d(lavaPos.getX() + 0.5D, lavaPos.getY() + 0.5D, lavaPos.getZ() + 0.5D);
         BlockHitResult hitResult = new BlockHitResult(hitPos, Direction.UP, lavaPos, false);
         
-        ActionResult result = client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hitResult);
-
-        if (!result.isAccepted()) return false;
-
+        int sequence = client.world.getPendingUpdateManager().getNewSequence();
+        client.getNetworkHandler().sendPacket(new PlayerInteractBlockC2SPacket(Hand.MAIN_HAND, hitResult, sequence));
         client.player.swingHand(Hand.MAIN_HAND);
+        
         return true;
     }
 
