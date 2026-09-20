@@ -3,20 +3,24 @@
   "id": "lavaassistant",
   "version": "${version}",
   "name": "Lava Assistant",
-  "description": "R dabao aur screen par ON/OFF popup dekho",
-  "authors": ["You"],
+  "description": "Custom X-ray and utility mod.",
+  "authors": [
+    "Ryusei"
+  ],
   "contact": {},
   "license": "MIT",
   "environment": "client",
   "entrypoints": {
     "client": [
-      "com.example.lavaassistant.LavaAssistantClient"
+      "com.example.lavaassistant.client.LavaAssistantClient"
     ]
   },
-  "mixins": [],
+  "mixins": [
+    "lavaassistant.mixins.json"
+  ],
   "depends": {
-    "fabricloader": ">=0.16.9",
-    "minecraft": "~1.21.1",
+    "fabricloader": ">=0.16.0",
+    "minecraft": "1.21.11",
     "java": ">=21",
     "fabric-api": "*"
   }
