@@ -1,13 +1,10 @@
 {
-  "schema_version": 1,
+  "schemaVersion": 1,
   "id": "lavaassistant",
   "version": "1.0.0",
   "name": "Lava Assistant",
-  "description": "Smart UHC AutoLava assistant mod",
-  "authors": [
-    "Ryusei"
-  ],
-  "contact": {},
+  "description": "Keybind toggle with an on-screen popup.",
+  "authors": ["TeraNaam"],
   "license": "MIT",
   "environment": "client",
   "entrypoints": {
@@ -16,8 +13,8 @@
     ]
   },
   "depends": {
-    "fabricloader": ">=0.15.0",
-    "minecraft": "1.21.11",
+    "fabricloader": ">=0.18.0",
+    "minecraft": "~1.21.11",
     "java": ">=21",
     "fabric-api": "*"
   }
