@@ -79,12 +79,11 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             if (cooldown > 0) cooldown--;
 
-            // ---------- AUTO WATER / SELF-EXTINGUISH (Highest Priority when burning) ----------
+            Item item = mc.player.getMainHandStack().getItem();
+
+            // ---------- AUTO WATER / SELF-EXTINGUISH (Haath mein Water Bucket hone par) ----------
             if (mc.player.isOnFire() || mc.player.getFireTicks() > 0) {
-                Item mainItem = mc.player.getMainHandStack().getItem();
-                
-                // Agar empty bucket haath mein hai aur pani pehle rakha tha, toh use wapas utha lo
-                if (mainItem == Items.BUCKET && waterPlacedPos != null) {
+                if (item == Items.BUCKET && waterPlacedPos != null) {
                     waterTicksSincePlace++;
                     if (waterTicksSincePlace > PICKUP_TIMEOUT_TICKS) {
                         waterPlacedPos = null;
@@ -126,8 +125,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                     }
                 }
 
-                // Agar water bucket haath mein hai, toh pairo ke neeche silent place karo
-                if (mainItem == Items.WATER_BUCKET) {
+                if (item == Items.WATER_BUCKET) {
                     BlockPos feet = mc.player.getBlockPos();
                     FluidState fs = mc.world.getFluidState(feet);
                     if (!fs.isOf(Fluids.WATER)) {
@@ -169,23 +167,8 @@ public class LavaAssistantClient implements ClientModInitializer {
                         mc.player.setPitch(oldPitch);
                         return;
                     }
-                } else {
-                    // Hotbar se automatically water bucket dhund kar switch karo
-                    int waterSlot = -1;
-                    for (int i = 0; i < 9; i++) {
-                        if (mc.player.getInventory().getStack(i).getItem() == Items.WATER_BUCKET) {
-                            waterSlot = i;
-                            break;
-                        }
-                    }
-                    if (waterSlot != -1) {
-                        mc.player.getInventory().selectedSlot = waterSlot;
-                        return;
-                    }
                 }
             }
-
-            Item item = mc.player.getMainHandStack().getItem();
 
             // ---------- VULCAN & GRIM BYPASS: SILENT SMOOTH AUTO LAVA PLACE ----------
             if (item == Items.LAVA_BUCKET) {
@@ -330,4 +313,4 @@ public class LavaAssistantClient implements ClientModInitializer {
         }
         return nearest;
     }
-            }
+                    }
