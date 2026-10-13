@@ -14,7 +14,6 @@ import net.minecraft.fluid.FluidState;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
-import net.minecraft.item.ShieldItem;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
@@ -38,6 +37,7 @@ public class LavaAssistantClient implements ClientModInitializer {
     private int state = 0;
     private int delayTicks = 0;
     private int originalSlot = 0;
+    private int cooldown = 0;
 
     @Override
     public void onInitializeClient() {
@@ -53,19 +53,20 @@ public class LavaAssistantClient implements ClientModInitializer {
         HudRenderCallback.EVENT.register((ctx, tickCounter) -> {
             MinecraftClient mc = MinecraftClient.getInstance();
             if (enabled && mc.player != null && mc.currentScreen == null) {
-                ctx.drawText(mc.textRenderer, Text.literal("§a[Auto Lava: TOGGLED ON]"), 10, 10, 0xFFFFFFFF, true);
+                ctx.drawText(mc.textRenderer, Text.literal("§a[Auto Lava: ACTIVE]"), 10, 10, 0xFFFFFFFF, true);
             }
         });
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             MinecraftClient mc = MinecraftClient.getInstance();
 
+            // Sirf ek baar R dabane par Toggle ON/OFF hoga
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
                 resetState();
                 if (mc.player != null) {
                     mc.player.sendMessage(Text.literal(enabled
-                            ? "§a[LavaAssistant] §fAuto Lava Enabled!"
+                            ? "§a[LavaAssistant] §fAuto Lava Enabled! (No need to hold R)"
                             : "§c[LavaAssistant] §fDisabled!"), false);
                 }
             }
@@ -73,36 +74,41 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (!enabled || mc.player == null || mc.world == null || mc.currentScreen != null)
                 return;
 
-            if (state == 0) {
+            if (cooldown > 0) cooldown--;
+
+            // Agar state machine chal rahi hai, toh steps execute karo
+            if (state != 0) {
+                if (delayTicks > 0) {
+                    delayTicks--;
+                } else {
+                    mc.execute(() -> step(mc));
+                }
+                return;
+            }
+
+            // CROSSHAIR TARGET CHECK: Jab toggle ON hai aur crosshair enemy par hai
+            if (cooldown == 0 && state == 0) {
                 if (!hasItemInHotbar(mc, Items.LAVA_BUCKET))
                     return;
 
                 if (mc.crosshairTarget != null && mc.crosshairTarget.getType() == HitResult.Type.ENTITY) {
                     Entity entity = ((EntityHitResult) mc.crosshairTarget).getEntity();
                     if (entity instanceof PlayerEntity player) {
+                        if (player == mc.player || player.isSpectator() || !player.isAlive())
+                            return;
+
                         // FIRE CHECK: Agar enemy pehle se jal raha hai toh skip karo
                         if (player.isOnFire() || player.getFireTicks() > 0)
                             return;
 
-                        // SHIELD CHECK or normal target
-                        boolean isShielding = player.isUsingItem() && (player.getActiveItem().getItem() instanceof ShieldItem);
-
                         targetPos = predictLandingPos(mc, player);
                         if (targetPos != null && isValidPlacement(mc, player, targetPos)) {
                             originalSlot = getSelectedSlot(mc.player.getInventory());
-                            state = 1; 
+                            state = 1; // Turant lava placement start ho jayegi!
                         } else {
                             targetPos = null;
                         }
                     }
-                }
-            }
-
-            if (state != 0) {
-                if (delayTicks > 0) {
-                    delayTicks--;
-                } else {
-                    mc.execute(() -> step(mc));
                 }
             }
         });
@@ -127,7 +133,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 if (placeLava(mc)) {
                     setSelectedSlot(mc.player.getInventory(), originalSlot);
                     state = 3;
-                    delayTicks = 15; // 15 ticks wait taaki lava settle ho aur pickup ho sake
+                    delayTicks = 12; // Lava spread aur settle hone ka wait
                 } else {
                     setSelectedSlot(mc.player.getInventory(), originalSlot);
                     resetState();
@@ -147,9 +153,9 @@ public class LavaAssistantClient implements ClientModInitializer {
                         }
                     }
                 }
-                // Pickup ke baad bhi turant sword par switch ho jao
-                setSelectedSlot(mc.player.getInventory(), originalSlot);
+                setSelectedSlot(mc.player.getInventory(), originalSlot); // Switch back to sword after pickup
                 resetState();
+                cooldown = 10; // Fast cooldown taaki next time turant kaam kare
             }
         }
     }
@@ -187,7 +193,7 @@ public class LavaAssistantClient implements ClientModInitializer {
         if (!mc.world.getBlockState(pos).isReplaceable() && !mc.world.getBlockState(pos).isAir())
             return false;
         
-        // WATER CHECK: Pani mein lava dal kar obsidian na bane
+        // WATER CHECK: Obsidian banne se rokne ke liye
         if (mc.world.getFluidState(pos).isOf(Fluids.WATER) || mc.world.getFluidState(pos.down()).isOf(Fluids.WATER))
             return false;
 
