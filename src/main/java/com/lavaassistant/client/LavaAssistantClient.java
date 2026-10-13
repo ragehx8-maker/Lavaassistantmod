@@ -8,6 +8,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.fluid.FluidState;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.ItemStack;
@@ -23,6 +24,8 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
+
+import java.lang.reflect.Field;
 
 public class LavaAssistantClient implements ClientModInitializer {
     public static boolean enabled = false;
@@ -75,7 +78,7 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             if (cooldown > 0) cooldown--;
 
-            // ---------- ORCHARD STYLE HIT-LAVA (SILENT PLACEMENT ON TARGET) ----------
+            // ---------- HIT-LAVA (SILENT PLACEMENT ON TARGET) ----------
             if (cooldown == 0 && mc.targetedEntity instanceof PlayerEntity target) {
                 if (target == mc.player || target.isSpectator()) return;
                 if (target.isOnFire() || target.getFireTicks() > 0) return; // Fire Check
@@ -83,11 +86,11 @@ public class LavaAssistantClient implements ClientModInitializer {
                 if (mc.player.distanceTo(target) <= RANGE) {
                     int lavaSlot = findItemInHotbar(mc, Items.LAVA_BUCKET);
                     if (lavaSlot != -1) {
-                        int originalSlot = mc.player.getInventory().selectedSlot;
+                        int originalSlot = getSelectedSlot(mc.player.getInventory());
 
-                        // Motion prediction for enemy feet (Fixed: using target.getPos().add)
+                        // Motion prediction for enemy feet (Fixed: using new Vec3d safely)
                         Vec3d vel = target.getVelocity();
-                        Vec3d pred = target.getPos().add(vel.x * 1.5, 0, vel.z * 1.5);
+                        Vec3d pred = new Vec3d(target.getX() + vel.x * 1.5, target.getY(), target.getZ() + vel.z * 1.5);
                         BlockPos feet = BlockPos.ofFloored(pred.getX(), target.getY(), pred.getZ());
                         BlockPos supportPos = feet.down();
 
@@ -97,7 +100,6 @@ public class LavaAssistantClient implements ClientModInitializer {
 
                         Vec3d aim = Vec3d.ofCenter(supportPos);
 
-                        // Calculate silent angles towards support block under feet
                         Vec3d eye = mc.player.getEyePos();
                         double dx = aim.x - eye.x;
                         double dy = aim.y - eye.y;
@@ -147,7 +149,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 if (fs.isOf(Fluids.LAVA) && fs.isStill()) {
                     int bucketSlot = findItemInHotbar(mc, Items.BUCKET);
                     if (bucketSlot != -1) {
-                        int originalSlot = mc.player.getInventory().selectedSlot;
+                        int originalSlot = getSelectedSlot(mc.player.getInventory());
 
                         Vec3d aim = Vec3d.ofCenter(placedPos);
                         Vec3d eye = mc.player.getEyePos();
@@ -191,5 +193,21 @@ public class LavaAssistantClient implements ClientModInitializer {
             }
         }
         return -1;
+    }
+
+    private int getSelectedSlot(PlayerInventory inventory) {
+        try {
+            Field field = PlayerInventory.class.getDeclaredField("selectedSlot");
+            field.setAccessible(true);
+            return field.getInt(inventory);
+        } catch (Exception e) {
+            try {
+                Field field = PlayerInventory.class.getDeclaredField("field_7545");
+                field.setAccessible(true);
+                return field.getInt(inventory);
+            } catch (Exception ex) {
+                return 0;
+            }
+        }
     }
 }
