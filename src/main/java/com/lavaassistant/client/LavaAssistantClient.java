@@ -2,13 +2,10 @@ package com.lavaassistant.client;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Items;
-import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
@@ -19,7 +16,7 @@ import org.lwjgl.glfw.GLFW;
 public class LavaAssistantClient implements ClientModInitializer {
     public static boolean enabled = false;
     public static boolean xrayEnabled = false;
-    private static KeyBinding toggleKey;
+    private boolean wasPressed = false;
 
     private boolean hasPlaced = false;
     private long lastActionTime = 0;
@@ -27,28 +24,33 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-                "key.lavaassistant.toggle",
-                InputUtil.Type.KEYSYM,
-                GLFW.GLFW_KEY_R,
-                "category.lavaassistant.general"
-        ));
+        // Screen par On/Off status popup dikhane ke liye HUD render callback
+        HudRenderCallback.EVENT.register((drawContext, tickCounter) -> {
+            MinecraftClient mc = MinecraftClient.getInstance();
+            if (enabled && mc.player != null && mc.currentScreen == null) {
+                int screenWidth = mc.getWindow().getScaledWidth();
+                int screenHeight = mc.getWindow().getScaledHeight();
+                
+                // Screen ke center mein status text render karega
+                drawContext.drawText(mc.textRenderer, "§a[AutoLava: ACTIVE]", screenWidth / 2 - 40, screenHeight / 2 + 15, 0xFFFFFF, true);
+            }
+        });
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             MinecraftClient mc = MinecraftClient.getInstance();
 
-            while (toggleKey.wasPressed()) {
+            if (mc.window == null)
+                return;
+
+            // Direct GLFW check for 'R' key
+            boolean isPressed = GLFW.glfwGetKey(mc.window.getHandle(), GLFW.GLFW_KEY_R) == GLFW.GLFW_PRESS;
+            if (isPressed && !wasPressed) {
                 enabled = !enabled;
-                if (mc.player != null) {
-                    // false lagane se message ab Chat Box me permanent dikhega
-                    if (enabled) {
-                        mc.player.sendMessage(Text.literal("§a[LavaAssistant] §fAutoLava Enabled!"), false);
-                    } else {
-                        mc.player.sendMessage(Text.literal("§c[LavaAssistant] §fAutoLava Disabled!"), false);
-                        hasPlaced = false;
-                    }
+                if (!enabled) {
+                    hasPlaced = false;
                 }
             }
+            wasPressed = isPressed;
 
             if (!enabled || mc.player == null || mc.world == null || mc.currentScreen != null)
                 return;
