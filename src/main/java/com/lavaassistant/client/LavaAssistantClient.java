@@ -1,25 +1,23 @@
 package com.lavaassistant.client;
 
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Items;
+import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
-import org.lwjgl.glfw.GLFW;
 
 public class LavaAssistantClient implements ClientModInitializer {
     public static boolean enabled = false;
     public static boolean xrayEnabled = false;
-    private static KeyBinding toggleKey;
 
     private boolean hasPlaced = false;
     private long lastActionTime = 0;
@@ -27,15 +25,26 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        // Register Keybinding under standard 'Misc' category so it appears in Controls menu
-        toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-                "key.lavaassistant.toggle",
-                InputUtil.Type.KEYSYM,
-                GLFW.GLFW_KEY_R,
-                "key.categories.misc"
-        ));
+        // Registering client command: /autolava
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
+            dispatcher.register(ClientCommandManager.literal("autolava")
+                .executes(context -> {
+                    enabled = !enabled;
+                    MinecraftClient mc = MinecraftClient.getInstance();
+                    if (mc.player != null) {
+                        if (enabled) {
+                            mc.player.sendMessage(Text.literal("§a[LavaAssistant] §fAutoLava Enabled!"), false);
+                        } else {
+                            mc.player.sendMessage(Text.literal("§c[LavaAssistant] §fAutoLava Disabled!"), false);
+                            hasPlaced = false;
+                        }
+                    }
+                    return 1;
+                })
+            );
+        });
 
-        // Screen HUD Render Callback for active popup
+        // Screen HUD Render Callback for active status popup
         HudRenderCallback.EVENT.register((drawContext, tickCounter) -> {
             MinecraftClient mc = MinecraftClient.getInstance();
             if (enabled && mc.player != null && mc.currentScreen == null) {
@@ -48,14 +57,6 @@ public class LavaAssistantClient implements ClientModInitializer {
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             MinecraftClient mc = MinecraftClient.getInstance();
-
-            // Check if key is pressed via registered KeyBinding
-            while (toggleKey.wasPressed()) {
-                enabled = !enabled;
-                if (!enabled) {
-                    hasPlaced = false;
-                }
-            }
 
             if (!enabled || mc.player == null || mc.world == null || mc.currentScreen != null)
                 return;
