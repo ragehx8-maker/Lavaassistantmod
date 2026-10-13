@@ -40,7 +40,6 @@ public class LavaAssistantClient implements ClientModInitializer {
     public void onInitializeClient() {
         System.out.println("[LavaAssistant] CLIENT LOADED");
 
-        // Fixed: Direct string category use ki hai taaki error na aaye
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.lavaassistant.toggle", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_R, "key.categories.misc"));
 
@@ -83,7 +82,8 @@ public class LavaAssistantClient implements ClientModInitializer {
                 if (target.isTouchingWater()) return;
 
                 Vec3d vel = target.getVelocity();
-                Vec3d pred = target.getEntityPos().add(vel.x * 2.0, 0, vel.z * 2.0);
+                // Fixed: getEntityPos() ki jagah getPos() use kiya hai
+                Vec3d pred = target.getPos().add(vel.x * 2.0, 0, vel.z * 2.0);
                 BlockPos feet = BlockPos.ofFloored(pred.x, target.getY() + 0.01, pred.z);
                 if (nearWater(mc, feet)) return;
 
@@ -157,8 +157,9 @@ public class LavaAssistantClient implements ClientModInitializer {
         mc.player.setPitch(pitch);
 
         if (mc.getNetworkHandler() != null) {
+            // Fixed: LookAndOnGround constructor se extra argument hata diya hai
             mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                    yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
+                    yaw, pitch, mc.player.isOnGround()));
         }
     }
 
