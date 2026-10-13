@@ -85,9 +85,9 @@ public class LavaAssistantClient implements ClientModInitializer {
                     if (lavaSlot != -1) {
                         int originalSlot = mc.player.getInventory().selectedSlot;
 
-                        // Motion prediction for enemy feet
+                        // Motion prediction for enemy feet (Fixed: using target.getPos().add)
                         Vec3d vel = target.getVelocity();
-                        Vec3d pred = target.add(vel.x * 1.5, 0, vel.z * 1.5);
+                        Vec3d pred = target.getPos().add(vel.x * 1.5, 0, vel.z * 1.5);
                         BlockPos feet = BlockPos.ofFloored(pred.getX(), target.getY(), pred.getZ());
                         BlockPos supportPos = feet.down();
 
@@ -106,7 +106,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                         float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
                         float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                        // 1. Send silent look packet (Screen doesn't shake or move)
+                        // 1. Send silent look packet
                         if (mc.getNetworkHandler() != null) {
                             mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
                                     targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
@@ -123,7 +123,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                         BlockHitResult bhr = new BlockHitResult(hitVec, Direction.UP, supportPos, false);
                         mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
 
-                        // 4. Instantly switch back to original slot (sword)
+                        // 4. Instantly switch back to original slot
                         if (mc.getNetworkHandler() != null) {
                             mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(originalSlot));
                         }
