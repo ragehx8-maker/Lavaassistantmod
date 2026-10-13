@@ -1,7 +1,24 @@
-"entrypoints": { "client": [ "com.lavaassistant.client.LavaAssistantClient" ] },
-"depends": {
-  "fabricloader": ">=0.18.0",
-  "minecraft": "~1.21.11",
-  "java": ">=21",
-  "fabric-api": "*"
+{
+  "schema_version": 1,
+  "id": "lavaassistant",
+  "version": "1.0.0",
+  "name": "Lava Assistant",
+  "description": "Smart UHC AutoLava assistant mod",
+  "authors": [
+    "Ryusei"
+  ],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.lavaassistant.client.LavaAssistantClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": "1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
 }
