@@ -16,7 +16,6 @@ import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.registry.tag.FluidTags;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
@@ -28,8 +27,6 @@ public class LavaAssistantClient implements ClientModInitializer {
     public static boolean enabled = false;
 
     private static KeyBinding toggleKey;
-    private static final KeyBinding.Category CATEGORY =
-            KeyBinding.Category.create(Identifier.of("lavaassistant", "main"));
 
     private static final double RANGE = 4.5;
     private static final int PICKUP_TIMEOUT_TICKS = 15;
@@ -43,8 +40,9 @@ public class LavaAssistantClient implements ClientModInitializer {
     public void onInitializeClient() {
         System.out.println("[LavaAssistant] CLIENT LOADED");
 
+        // Fixed: Direct string category use ki hai taaki error na aaye
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-                "key.lavaassistant.toggle", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_R, CATEGORY));
+                "key.lavaassistant.toggle", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_R, "key.categories.misc"));
 
         HudRenderCallback.EVENT.register((ctx, tickCounter) -> {
             MinecraftClient mc = MinecraftClient.getInstance();
@@ -82,19 +80,18 @@ public class LavaAssistantClient implements ClientModInitializer {
 
                 PlayerEntity target = findNearestPlayer(mc, RANGE);
                 if (target == null || !target.isOnGround()) return;
-                if (target.isTouchingWater()) return; // enemy pani mein hai
+                if (target.isTouchingWater()) return;
 
                 Vec3d vel = target.getVelocity();
                 Vec3d pred = target.getEntityPos().add(vel.x * 2.0, 0, vel.z * 2.0);
                 BlockPos feet = BlockPos.ofFloored(pred.x, target.getY() + 0.01, pred.z);
-                if (nearWater(mc, feet)) return; // pani pe ya bagal mein nahi
+                if (nearWater(mc, feet)) return;
 
                 Vec3d aim = new Vec3d(pred.x, feet.getY(), pred.z);
                 if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
 
                 lookAt(mc, aim);
 
-                // Verify: click sach mein usi jagah lava rakhega?
                 HitResult hr = mc.player.raycast(RANGE, 1.0f, false);
                 if (hr.getType() != HitResult.Type.BLOCK) return;
                 BlockHitResult bhr = (BlockHitResult) hr;
