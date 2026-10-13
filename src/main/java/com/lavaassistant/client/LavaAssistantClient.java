@@ -18,7 +18,7 @@ import org.lwjgl.glfw.GLFW;
 
 public class LavaAssistantClient implements ClientModInitializer {
     public static boolean enabled = false;
-    public static boolean xrayEnabled = false; // Fix for mixin error
+    public static boolean xrayEnabled = false;
     private static KeyBinding toggleKey;
 
     private boolean hasPlaced = false;
@@ -29,7 +29,7 @@ public class LavaAssistantClient implements ClientModInitializer {
     public void onInitializeClient() {
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.lavaassistant.toggle",
-                InputUtil.Type.KEYSYM, // Fixed: removed underscore
+                InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_R,
                 "category.lavaassistant.general"
         ));
@@ -40,10 +40,11 @@ public class LavaAssistantClient implements ClientModInitializer {
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
                 if (mc.player != null) {
+                    // false lagane se message ab Chat Box me permanent dikhega
                     if (enabled) {
-                        mc.player.sendMessage(Text.literal("§a[LavaAssistant] §fAutoLava Enabled!"), true);
+                        mc.player.sendMessage(Text.literal("§a[LavaAssistant] §fAutoLava Enabled!"), false);
                     } else {
-                        mc.player.sendMessage(Text.literal("§c[LavaAssistant] §fAutoLava Disabled!"), true);
+                        mc.player.sendMessage(Text.literal("§c[LavaAssistant] §fAutoLava Disabled!"), false);
                         hasPlaced = false;
                     }
                 }
