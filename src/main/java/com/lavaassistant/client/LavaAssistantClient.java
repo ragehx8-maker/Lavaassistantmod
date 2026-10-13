@@ -21,7 +21,8 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (enabled && mc.player != null && mc.currentScreen == null) {
                 int w = mc.getWindow().getScaledWidth();
                 int h = mc.getWindow().getScaledHeight();
-                ctx.drawText(mc.textRenderer, "§a[AutoLava: ACTIVE]", w / 2 - 45, h / 2 + 15, 0xFFFFFFFF, true);
+                // Fixed: String ki jagah Text.literal use kiya hai
+                ctx.drawText(mc.textRenderer, Text.literal("§a[AutoLava: ACTIVE]"), w / 4.5 > 0 ? w / 2 - 45 : w / 2 - 45, h / 2 + 15, 0xFFFFFFFF, true);
             }
         });
 
