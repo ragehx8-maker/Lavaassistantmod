@@ -90,7 +90,8 @@ public class LavaAssistantClient implements ClientModInitializer {
                 if (target.isTouchingWater()) return;
 
                 Vec3d vel = target.getVelocity();
-                Vec3d pred = target.getPos().add(vel.x * 2.0, 0, vel.z * 2.0);
+                // Fix: getPos() ki jagah direct getX(), getY(), getZ() use kiya hai taaki mapping error na aaye
+                Vec3d pred = new Vec3d(target.getX(), target.getY(), target.getZ()).add(vel.x * 2.0, 0, vel.z * 2.0);
                 BlockPos feet = BlockPos.ofFloored(pred.x, target.getY() + 0.01, pred.z);
                 if (nearWater(mc, feet)) return;
 
@@ -164,8 +165,9 @@ public class LavaAssistantClient implements ClientModInitializer {
         mc.player.setPitch(pitch);
 
         if (mc.getNetworkHandler() != null) {
+            // Fix: 4th parameter (horizontalCollision) wapas add kar diya hai
             mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                    yaw, pitch, mc.player.isOnGround()));
+                    yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
         }
     }
 
