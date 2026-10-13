@@ -16,9 +16,7 @@ import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
@@ -76,7 +74,7 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             Item item = mc.player.getMainHandStack().getItem();
 
-            // ---------- THUNDERHACK STYLE: HEAD TURNS IN 3RD PERSON, 1ST PERSON STABLE ----------
+            // ---------- THUNDERHACK STYLE: 1ST PERSON STABLE, 3RD PERSON HEAD TURN & INTERACT ITEM ----------
             if (item == Items.LAVA_BUCKET) {
                 if (cooldown > 0) return;
 
@@ -84,7 +82,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 if (target == null) return;
                 if (target.isOnFire() || target.getFireTicks() > 0) return;
 
-                // Motion prediction
+                // Motion prediction for moving/running enemies
                 Vec3d vel = target.getVelocity();
                 Vec3d targetPos = new Vec3d(target.getX(), target.getY(), target.getZ());
                 Vec3d pred = targetPos.add(vel.x * 1.8, vel.y * 0.5, vel.z * 1.8);
@@ -95,10 +93,10 @@ public class LavaAssistantClient implements ClientModInitializer {
                 FluidState existingFs = mc.world.getFluidState(feet);
                 if (existingFs.isOf(Fluids.LAVA)) return;
 
-                Vec3d aim = Vec3d.ofCenter(supportPos);
+                Vec3d aim = Vec3d.ofBottomCenter(feet);
                 if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
 
-                // Calculate target look angles
+                // Calculate target look angles towards enemy feet
                 Vec3d eye = mc.player.getEyePos();
                 double dx = aim.x - eye.x;
                 double dy = aim.y - eye.y;
@@ -107,20 +105,17 @@ public class LavaAssistantClient implements ClientModInitializer {
                 float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
                 float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                // 1. Send look packet to server for anti-cheat and other players
+                // 1. Send look packet to server so server registers the correct aim vector
                 if (mc.getNetworkHandler() != null) {
                     mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
                             targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
                 }
 
-                // 2. Turn the head visually in 3rd person without shaking the 1st person screen camera
+                // 2. Visually turn head in 3rd person without shaking 1st person screen camera
                 mc.player.setHeadYaw(targetYaw);
 
-                // 3. Direct accurate block placement
-                Vec3d hitVec = new Vec3d(supportPos.getX() + 0.5, supportPos.getY() + 1.0, supportPos.getZ() + 0.5);
-                BlockHitResult bhr = new BlockHitResult(hitVec, Direction.UP, supportPos, false);
-
-                mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
+                // 3. Correct interaction method for lava bucket
+                mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
                 mc.player.swingHand(Hand.MAIN_HAND);
 
                 placedPos = feet;
@@ -142,7 +137,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 if (!fs.isOf(Fluids.LAVA) || !fs.isStill()) return;
 
                 Vec3d aim = Vec3d.ofCenter(placedPos);
-                if (mc.player.getEyePos().distanceTo(aim) >RANGE) return;
+                if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
 
                 Vec3d eye = mc.player.getEyePos();
                 double dx = aim.x - eye.x;
