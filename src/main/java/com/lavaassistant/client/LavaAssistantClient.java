@@ -10,9 +10,11 @@ import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
+import net.minecraft.fluid.FluidState;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.item.ShieldItem;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
@@ -35,7 +37,7 @@ public class LavaAssistantClient implements ClientModInitializer {
     private BlockPos targetPos;
     private int state = 0;
     private int delayTicks = 0;
-    private boolean keyWasPressed = false;
+    private int originalSlot = 0;
 
     @Override
     public void onInitializeClient() {
@@ -51,7 +53,7 @@ public class LavaAssistantClient implements ClientModInitializer {
         HudRenderCallback.EVENT.register((ctx, tickCounter) -> {
             MinecraftClient mc = MinecraftClient.getInstance();
             if (enabled && mc.player != null && mc.currentScreen == null) {
-                ctx.drawText(mc.textRenderer, Text.literal("§a[Auto Lava: ON]"), 10, 10, 0xFFFFFFFF, true);
+                ctx.drawText(mc.textRenderer, Text.literal("§a[Auto Lava: TOGGLED ON]"), 10, 10, 0xFFFFFFFF, true);
             }
         });
 
@@ -71,33 +73,30 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (!enabled || mc.player == null || mc.world == null || mc.currentScreen != null)
                 return;
 
-            boolean pressed = toggleKey.isPressed();
-
-            if (pressed && !keyWasPressed && state == 0) {
-                if (!hasItemInHotbar(mc, Items.LAVA_BUCKET)) {
-                    keyWasPressed = pressed;
+            if (state == 0) {
+                if (!hasItemInHotbar(mc, Items.LAVA_BUCKET))
                     return;
-                }
 
                 if (mc.crosshairTarget != null && mc.crosshairTarget.getType() == HitResult.Type.ENTITY) {
                     Entity entity = ((EntityHitResult) mc.crosshairTarget).getEntity();
                     if (entity instanceof PlayerEntity player) {
-                        // FIRE CHECK: Agar enemy pehle se jal raha hai toh trigger mat karo
-                        if (player.isOnFire() || player.getFireTicks() > 0) {
-                            keyWasPressed = pressed;
+                        // FIRE CHECK: Agar enemy pehle se jal raha hai toh skip karo
+                        if (player.isOnFire() || player.getFireTicks() > 0)
                             return;
-                        }
+
+                        // SHIELD CHECK or normal target
+                        boolean isShielding = player.isUsingItem() && (player.getActiveItem().getItem() instanceof ShieldItem);
 
                         targetPos = predictLandingPos(mc, player);
-                        if (targetPos != null && isValidPlacement(mc, player, targetPos))
-                            state = 1;
-                        else
+                        if (targetPos != null && isValidPlacement(mc, player, targetPos)) {
+                            originalSlot = getSelectedSlot(mc.player.getInventory());
+                            state = 1; 
+                        } else {
                             targetPos = null;
+                        }
                     }
                 }
             }
-
-            keyWasPressed = pressed;
 
             if (state != 0) {
                 if (delayTicks > 0) {
@@ -115,6 +114,7 @@ public class LavaAssistantClient implements ClientModInitializer {
 
         switch (state) {
             case 1 -> {
+                // Hotbar se lava bucket select karo
                 if (selectItemFromHotbar(mc, Items.LAVA_BUCKET)) {
                     state = 2;
                     delayTicks = 1;
@@ -123,15 +123,32 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
             }
             case 2 -> {
+                // Lava place karo aur TURANT sword par wapas switch ho jao
                 if (placeLava(mc)) {
+                    setSelectedSlot(mc.player.getInventory(), originalSlot);
                     state = 3;
-                    delayTicks = 6; // Lava settle hone ka wait taaki bucket se wapas utha sakein
+                    delayTicks = 15; // 15 ticks wait taaki lava settle ho aur pickup ho sake
                 } else {
+                    setSelectedSlot(mc.player.getInventory(), originalSlot);
                     resetState();
                 }
             }
             case 3 -> {
-                pickLavaBackUp(mc);
+                // Lava ko wapas bucket mein uthao
+                if (targetPos != null) {
+                    FluidState fs = mc.world.getFluidState(targetPos);
+                    if (fs.isOf(Fluids.LAVA)) {
+                        if (selectItemFromHotbar(mc, Items.BUCKET)) {
+                            lookAt(mc, targetPos.toCenterPos());
+                            ActionResult result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+                            if (result.isAccepted()) {
+                                mc.player.swingHand(Hand.MAIN_HAND);
+                            }
+                        }
+                    }
+                }
+                // Pickup ke baad bhi turant sword par switch ho jao
+                setSelectedSlot(mc.player.getInventory(), originalSlot);
                 resetState();
             }
         }
@@ -193,21 +210,6 @@ public class LavaAssistantClient implements ClientModInitializer {
         return false;
     }
 
-    private void pickLavaBackUp(MinecraftClient mc) {
-        if (targetPos == null)
-            return;
-
-        if (!hasItemInHotbar(mc, Items.BUCKET))
-            return;
-
-        if (selectItemFromHotbar(mc, Items.BUCKET)) {
-            lookAt(mc, targetPos.toCenterPos());
-            ActionResult result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-            if (result.isAccepted())
-                mc.player.swingHand(Hand.MAIN_HAND);
-        }
-    }
-
     private void lookAt(MinecraftClient mc, Vec3d target) {
         Vec3d delta = target.subtract(mc.player.getEyePos());
         double horizontal = delta.horizontalLength();
@@ -235,6 +237,22 @@ public class LavaAssistantClient implements ClientModInitializer {
         return false;
     }
 
+    private int getSelectedSlot(PlayerInventory inventory) {
+        try {
+            Field field = PlayerInventory.class.getDeclaredField("selectedSlot");
+            field.setAccessible(true);
+            return field.getInt(inventory);
+        } catch (Exception e) {
+            try {
+                Field field = PlayerInventory.class.getDeclaredField("field_7545");
+                field.setAccessible(true);
+                return field.getInt(inventory);
+            } catch (Exception ex) {
+                return 0;
+            }
+        }
+    }
+
     private void setSelectedSlot(PlayerInventory inventory, int slot) {
         try {
             Field field = PlayerInventory.class.getDeclaredField("selectedSlot");
@@ -255,6 +273,5 @@ public class LavaAssistantClient implements ClientModInitializer {
         targetPos = null;
         state = 0;
         delayTicks = 0;
-        keyWasPressed = false;
     }
 }
