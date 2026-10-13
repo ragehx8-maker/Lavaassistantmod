@@ -16,6 +16,8 @@ import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
@@ -74,29 +76,33 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             Item item = mc.player.getMainHandStack().getItem();
 
-            // ---------- THUNDERHACK STYLE: 1ST PERSON STABLE, 3RD PERSON HEAD TURN & INTERACT ITEM ----------
+            // ---------- AIMASSIST STYLE ACCURATE AUTO LAVA PLACE ----------
             if (item == Items.LAVA_BUCKET) {
                 if (cooldown > 0) return;
 
                 PlayerEntity target = findNearestPlayer(mc, RANGE);
                 if (target == null) return;
+                
+                // Fire Check: Agar enemy pehle se jal raha hai toh lava mat dalo
                 if (target.isOnFire() || target.getFireTicks() > 0) return;
 
-                // Motion prediction for moving/running enemies
+                // Motion prediction for moving enemies
                 Vec3d vel = target.getVelocity();
                 Vec3d targetPos = new Vec3d(target.getX(), target.getY(), target.getZ());
                 Vec3d pred = targetPos.add(vel.x * 1.8, vel.y * 0.5, vel.z * 1.8);
                 BlockPos feet = BlockPos.ofFloored(pred.x, target.getY(), pred.z);
-                BlockPos supportPos = feet.down();
 
-                if (mc.world.getBlockState(supportPos).isAir()) return;
                 FluidState existingFs = mc.world.getFluidState(feet);
                 if (existingFs.isOf(Fluids.LAVA)) return;
 
                 Vec3d aim = Vec3d.ofBottomCenter(feet);
                 if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
 
-                // Calculate target look angles towards enemy feet
+                // Save old angles
+                float oldYaw = mc.player.getYaw();
+                float oldPitch = mc.player.getPitch();
+
+                // Calculate target angles towards enemy feet
                 Vec3d eye = mc.player.getEyePos();
                 double dx = aim.x - eye.x;
                 double dy = aim.y - eye.y;
@@ -105,26 +111,37 @@ public class LavaAssistantClient implements ClientModInitializer {
                 float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
                 float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                // 1. Send look packet to server so server registers the correct aim vector
+                // Temporarily set client view for 100% accurate raycast / interact item
+                mc.player.setYaw(targetYaw);
+                mc.player.setPitch(targetPitch);
+                mc.player.setHeadYaw(targetYaw);
+
                 if (mc.getNetworkHandler() != null) {
                     mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
                             targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
                 }
 
-                // 2. Visually turn head in 3rd person without shaking 1st person screen camera
-                mc.player.setHeadYaw(targetYaw);
+                // Raycast & Interact Item to place lava accurately under feet
+                HitResult hr = mc.player.raycast(RANGE, 1.0f, false);
+                if (hr.getType() == HitResult.Type.BLOCK) {
+                    BlockHitResult bhr = (BlockHitResult) hr;
+                    BlockPos willPlace = bhr.getBlockPos().offset(bhr.getSide());
+                    if (willPlace.equals(feet) || willPlace.equals(target.getBlockPos())) {
+                        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+                        mc.player.swingHand(Hand.MAIN_HAND);
+                        placedPos = feet;
+                        ticksSincePlace = 0;
+                        cooldown = PLACE_COOLDOWN_TICKS;
+                    }
+                }
 
-                // 3. Correct interaction method for lava bucket
-                mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-                mc.player.swingHand(Hand.MAIN_HAND);
-
-                placedPos = feet;
-                ticksSincePlace = 0;
-                cooldown = PLACE_COOLDOWN_TICKS;
+                // Restore old camera view instantly so screen stays normal
+                mc.player.setYaw(oldYaw);
+                mc.player.setPitch(oldPitch);
                 return;
             }
 
-            // ---------- THUNDERHACK STYLE AUTO PICKUP ----------
+            // ---------- AUTO PICKUP BUCKET ----------
             if (item == Items.BUCKET && placedPos != null) {
                 ticksSincePlace++;
 
@@ -139,6 +156,9 @@ public class LavaAssistantClient implements ClientModInitializer {
                 Vec3d aim = Vec3d.ofCenter(placedPos);
                 if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
 
+                float oldYaw = mc.player.getYaw();
+                float oldPitch = mc.player.getPitch();
+
                 Vec3d eye = mc.player.getEyePos();
                 double dx = aim.x - eye.x;
                 double dy = aim.y - eye.y;
@@ -147,15 +167,20 @@ public class LavaAssistantClient implements ClientModInitializer {
                 float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
                 float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
+                mc.player.setYaw(targetYaw);
+                mc.player.setPitch(targetPitch);
+                mc.player.setHeadYaw(targetYaw);
+
                 if (mc.getNetworkHandler() != null) {
                     mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
                             targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
                 }
 
-                mc.player.setHeadYaw(targetYaw);
-
                 mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
                 mc.player.swingHand(Hand.MAIN_HAND);
+
+                mc.player.setYaw(oldYaw);
+                mc.player.setPitch(oldPitch);
 
                 placedPos = null;
                 cooldown = PLACE_COOLDOWN_TICKS;
