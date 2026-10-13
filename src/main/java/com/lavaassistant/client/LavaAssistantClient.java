@@ -10,12 +10,16 @@ import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.fluid.FluidState;
 import net.minecraft.fluid.Fluids;
-import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
+import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
@@ -28,7 +32,11 @@ public class LavaAssistantClient implements ClientModInitializer {
             KeyBinding.Category.create(Identifier.of("lavaassistant", "main"));
 
     private static final double RANGE = 4.5;
-    private static final int COOLDOWN_TICKS = 8;
+    private static final int PICKUP_TIMEOUT_TICKS = 25;
+    private static final int PLACE_COOLDOWN_TICKS = 15;
+
+    private BlockPos placedPos = null;
+    private int ticksSincePlace = 0;
     private int cooldown = 0;
 
     @Override
@@ -45,7 +53,7 @@ public class LavaAssistantClient implements ClientModInitializer {
         HudRenderCallback.EVENT.register((ctx, tickCounter) -> {
             MinecraftClient mc = MinecraftClient.getInstance();
             if (enabled && mc.player != null && mc.currentScreen == null) {
-                ctx.drawText(mc.textRenderer, Text.literal("§a[AutoLava: ON]"), 10, 10, 0xFFFFFFFF, true);
+                ctx.drawText(mc.textRenderer, Text.literal("§a[HitLava: ON]"), 10, 10, 0xFFFFFFFF, true);
             }
         });
 
@@ -54,9 +62,10 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
+                placedPos = null;
                 if (mc.player != null) {
                     mc.player.sendMessage(Text.literal(enabled
-                            ? "§a[LavaAssistant] §fEnabled!"
+                            ? "§a[LavaAssistant] §fHit-Lava Enabled!"
                             : "§c[LavaAssistant] §fDisabled!"), false);
                 }
             }
@@ -66,106 +75,121 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             if (cooldown > 0) cooldown--;
 
-            Item item = mc.player.getMainHandStack().getItem();
+            // ---------- ORCHARD STYLE HIT-LAVA (SILENT PLACEMENT ON TARGET) ----------
+            if (cooldown == 0 && mc.targetedEntity instanceof PlayerEntity target) {
+                if (target == mc.player || target.isSpectator()) return;
+                if (target.isOnFire() || target.getFireTicks() > 0) return; // Fire Check
 
-            // ---------- 1. AIMASSIST ONLY WHEN HOLDING LAVA BUCKET (MANUAL PLACE) ----------
-            if (item == Items.LAVA_BUCKET) {
-                PlayerEntity target = findNearestPlayer(mc, RANGE);
-                if (target == null) return;
+                if (mc.player.distanceTo(target) <= RANGE) {
+                    int lavaSlot = findItemInHotbar(mc, Items.LAVA_BUCKET);
+                    if (lavaSlot != -1) {
+                        int originalSlot = mc.player.getInventory().selectedSlot;
 
-                // Fire Check: Agar enemy pehle se jal raha hai toh aimassist trigger mat karo
-                if (target.isOnFire() || target.getFireTicks() > 0) return;
+                        // Motion prediction for enemy feet
+                        Vec3d vel = target.getVelocity();
+                        Vec3d pred = target.add(vel.x * 1.5, 0, vel.z * 1.5);
+                        BlockPos feet = BlockPos.ofFloored(pred.getX(), target.getY(), pred.getZ());
+                        BlockPos supportPos = feet.down();
 
-                // Motion prediction for moving enemies
-                Vec3d vel = target.getVelocity();
-                Vec3d targetPos = new Vec3d(target.getX(), target.getY(), target.getZ());
-                Vec3d pred = targetPos.add(vel.x * 1.8, vel.y * 0.5, vel.z * 1.8);
-                BlockPos feet = BlockPos.ofFloored(pred.x, target.getY(), pred.z);
+                        if (mc.world.getBlockState(supportPos).isAir()) return;
+                        FluidState existingFs = mc.world.getFluidState(feet);
+                        if (existingFs.isOf(Fluids.LAVA)) return;
 
-                Vec3d aim = Vec3d.ofBottomCenter(feet);
-                if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
+                        Vec3d aim = Vec3d.ofCenter(supportPos);
 
-                Vec3d eye = mc.player.getEyePos();
-                double dx = aim.x - eye.x;
-                double dy = aim.y - eye.y;
-                double dz = aim.z - eye.z;
-                double horizontal = Math.sqrt(dx * dx + dz * dz);
-                float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
-                float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
+                        // Calculate silent angles towards support block under feet
+                        Vec3d eye = mc.player.getEyePos();
+                        double dx = aim.x - eye.x;
+                        double dy = aim.y - eye.y;
+                        double dz = aim.z - eye.z;
+                        double horizontal = Math.sqrt(dx * dx + dz * dz);
+                        float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+                        float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                // Smooth aimassist rotation towards enemy feet (Character won't freeze or lag)
-                float currentYaw = mc.player.getYaw();
-                float currentPitch = mc.player.getPitch();
+                        // 1. Send silent look packet (Screen doesn't shake or move)
+                        if (mc.getNetworkHandler() != null) {
+                            mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
+                                    targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
+                        }
+                        mc.player.setHeadYaw(targetYaw);
 
-                float newYaw = smoothAngle(currentYaw, targetYaw, 60.0f);
-                float newPitch = MathHelper.clamp(currentPitch + MathHelper.wrapDegrees(targetPitch - currentPitch) * 0.5f, -90.0f, 90.0f);
+                        // 2. Silent hotbar slot switch to lava bucket
+                        if (mc.getNetworkHandler() != null) {
+                            mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(lavaSlot));
+                        }
 
-                mc.player.setYaw(newYaw);
-                mc.player.setPitch(newPitch);
-                mc.player.setHeadYaw(newYaw);
-                return;
+                        // 3. Place lava silently
+                        Vec3d hitVec = new Vec3d(supportPos.getX() + 0.5, supportPos.getY() + 1.0, supportPos.getZ() + 0.5);
+                        BlockHitResult bhr = new BlockHitResult(hitVec, Direction.UP, supportPos, false);
+                        mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
+
+                        // 4. Instantly switch back to original slot (sword)
+                        if (mc.getNetworkHandler() != null) {
+                            mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(originalSlot));
+                        }
+
+                        placedPos = feet;
+                        ticksSincePlace = 0;
+                        cooldown = PLACE_COOLDOWN_TICKS;
+                    }
+                }
             }
 
-            // ---------- 2. AUTO PICKUP WHEN HOLDING EMPTY BUCKET ----------
-            if (item == Items.BUCKET) {
-                if (cooldown > 0) return;
+            // ---------- SILENT AUTO PICKUP BUCKET ----------
+            if (placedPos != null) {
+                ticksSincePlace++;
+                if (ticksSincePlace > PICKUP_TIMEOUT_TICKS) {
+                    placedPos = null;
+                    return;
+                }
 
-                PlayerEntity target = findNearestPlayer(mc, RANGE);
-                if (target == null) return;
+                FluidState fs = mc.world.getFluidState(placedPos);
+                if (fs.isOf(Fluids.LAVA) && fs.isStill()) {
+                    int bucketSlot = findItemInHotbar(mc, Items.BUCKET);
+                    if (bucketSlot != -1) {
+                        int originalSlot = mc.player.getInventory().selectedSlot;
 
-                BlockPos feet = BlockPos.ofFloored(target.getX(), target.getY(), target.getZ());
-                FluidState fs = mc.world.getFluidState(feet);
-                if (!fs.isOf(Fluids.LAVA) || !fs.isStill()) return;
+                        Vec3d aim = Vec3d.ofCenter(placedPos);
+                        Vec3d eye = mc.player.getEyePos();
+                        double dx = aim.x - eye.x;
+                        double dy = aim.y - eye.y;
+                        double dz = aim.z - eye.z;
+                        double horizontal = Math.sqrt(dx * dx + dz * dz);
+                        float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+                        float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                Vec3d aim = Vec3d.ofCenter(feet);
-                if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
+                        if (mc.getNetworkHandler() != null) {
+                            mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
+                                    targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
+                        }
+                        mc.player.setHeadYaw(targetYaw);
 
-                Vec3d eye = mc.player.getEyePos();
-                double dx = aim.x - eye.x;
-                double dy = aim.y - eye.y;
-                double dz = aim.z - eye.z;
-                double horizontal = Math.sqrt(dx * dx + dz * dz);
-                float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
-                float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
+                        if (mc.getNetworkHandler() != null) {
+                            mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(bucketSlot));
+                        }
 
-                // Smoothly aim at the placed lava block
-                float currentYaw = mc.player.getYaw();
-                float currentPitch = mc.player.getPitch();
+                        BlockHitResult bhr = new BlockHitResult(aim, Direction.UP, placedPos, false);
+                        mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
 
-                float newYaw = smoothAngle(currentYaw, targetYaw, 60.0f);
-                float newPitch = MathHelper.clamp(currentPitch + MathHelper.wrapDegrees(targetPitch - currentPitch) * 0.5f, -90.0f, 90.0f);
+                        if (mc.getNetworkHandler() != null) {
+                            mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(originalSlot));
+                        }
 
-                mc.player.setYaw(newYaw);
-                mc.player.setPitch(newPitch);
-                mc.player.setHeadYaw(newYaw);
-
-                if (Math.abs(MathHelper.wrapDegrees(targetYaw - newYaw)) < 10.0f) {
-                    mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-                    mc.player.swingHand(Hand.MAIN_HAND);
-                    cooldown = COOLDOWN_TICKS;
+                        placedPos = null;
+                        cooldown = PLACE_COOLDOWN_TICKS;
+                    }
                 }
             }
         });
     }
 
-    private float smoothAngle(float current, float target, float maxDelta) {
-        float diff = MathHelper.wrapDegrees(target - current);
-        if (diff > maxDelta) diff = maxDelta;
-        if (diff < -maxDelta) diff = -maxDelta;
-        return current + diff;
-    }
-
-    private PlayerEntity findNearestPlayer(MinecraftClient mc, double range) {
-        PlayerEntity nearest = null;
-        double best = range * range;
-        for (PlayerEntity p : mc.world.getPlayers()) {
-            if (p == mc.player || p.isSpectator()) continue;
-            double d = mc.player.squaredDistanceTo(p);
-            if (d <= best) {
-                best = d;
-                nearest = p.isAlive() ? p : null;
+    private int findItemInHotbar(MinecraftClient mc, net.minecraft.item.Item targetItem) {
+        for (int i = 0; i < 9; i++) {
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            if (stack.isOf(targetItem)) {
+                return i;
             }
         }
-        return nearest;
+        return -1;
     }
 }
