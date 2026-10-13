@@ -76,7 +76,7 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             Item item = mc.player.getMainHandStack().getItem();
 
-            // ---------- AIMASSIST STYLE ACCURATE AUTO LAVA PLACE ----------
+            // ---------- TAGDA & FAST AIMASSIST AUTO LAVA PLACE ----------
             if (item == Items.LAVA_BUCKET) {
                 if (cooldown > 0) return;
 
@@ -86,7 +86,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 // Fire Check: Agar enemy pehle se jal raha hai toh lava mat dalo
                 if (target.isOnFire() || target.getFireTicks() > 0) return;
 
-                // Motion prediction for moving enemies
+                // Motion prediction for moving/running enemies
                 Vec3d vel = target.getVelocity();
                 Vec3d targetPos = new Vec3d(target.getX(), target.getY(), target.getZ());
                 Vec3d pred = targetPos.add(vel.x * 1.8, vel.y * 0.5, vel.z * 1.8);
@@ -98,11 +98,9 @@ public class LavaAssistantClient implements ClientModInitializer {
                 Vec3d aim = Vec3d.ofBottomCenter(feet);
                 if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
 
-                // Save old angles
                 float oldYaw = mc.player.getYaw();
                 float oldPitch = mc.player.getPitch();
 
-                // Calculate target angles towards enemy feet
                 Vec3d eye = mc.player.getEyePos();
                 double dx = aim.x - eye.x;
                 double dy = aim.y - eye.y;
@@ -111,17 +109,23 @@ public class LavaAssistantClient implements ClientModInitializer {
                 float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
                 float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                // Temporarily set client view for 100% accurate raycast / interact item
-                mc.player.setYaw(targetYaw);
-                mc.player.setPitch(targetPitch);
-                mc.player.setHeadYaw(targetYaw);
+                // Tagda & Fast Snap: Aim instantly slams down forcefully towards enemy feet
+                float currentYaw = mc.player.getYaw();
+                float currentPitch = mc.player.getPitch();
+
+                float snappedYaw = smoothAngle(currentYaw, targetYaw, 180.0f);
+                float snappedPitch = MathHelper.clamp(currentPitch + MathHelper.wrapDegrees(targetPitch - currentPitch) * 0.9f, -90.0f, 90.0f);
+
+                mc.player.setYaw(snappedYaw);
+                mc.player.setPitch(snappedPitch);
+                mc.player.setHeadYaw(snappedYaw);
 
                 if (mc.getNetworkHandler() != null) {
                     mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                            targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
+                            snappedYaw, snappedPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
                 }
 
-                // Raycast & Interact Item to place lava accurately under feet
+                // Instant accurate placement right under feet
                 HitResult hr = mc.player.raycast(RANGE, 1.0f, false);
                 if (hr.getType() == HitResult.Type.BLOCK) {
                     BlockHitResult bhr = (BlockHitResult) hr;
@@ -135,13 +139,12 @@ public class LavaAssistantClient implements ClientModInitializer {
                     }
                 }
 
-                // Restore old camera view instantly so screen stays normal
                 mc.player.setYaw(oldYaw);
                 mc.player.setPitch(oldPitch);
                 return;
             }
 
-            // ---------- AUTO PICKUP BUCKET ----------
+            // ---------- TAGDA & FAST AUTO PICKUP ----------
             if (item == Items.BUCKET && placedPos != null) {
                 ticksSincePlace++;
 
@@ -167,13 +170,19 @@ public class LavaAssistantClient implements ClientModInitializer {
                 float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
                 float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                mc.player.setYaw(targetYaw);
-                mc.player.setPitch(targetPitch);
-                mc.player.setHeadYaw(targetYaw);
+                float currentYaw = mc.player.getYaw();
+                float currentPitch = mc.player.getPitch();
+
+                float snappedYaw = smoothAngle(currentYaw, targetYaw, 180.0f);
+                float snappedPitch = MathHelper.clamp(currentPitch + MathHelper.wrapDegrees(targetPitch - currentPitch) * 0.9f, -90.0f, 90.0f);
+
+                mc.player.setYaw(snappedYaw);
+                mc.player.setPitch(snappedPitch);
+                mc.player.setHeadYaw(snappedYaw);
 
                 if (mc.getNetworkHandler() != null) {
                     mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                            targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
+                            snappedYaw, snappedPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
                 }
 
                 mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
@@ -186,6 +195,13 @@ public class LavaAssistantClient implements ClientModInitializer {
                 cooldown = PLACE_COOLDOWN_TICKS;
             }
         });
+    }
+
+    private float smoothAngle(float current, float target, float maxDelta) {
+        float diff = MathHelper.wrapDegrees(target - current);
+        if (diff > maxDelta) diff = maxDelta;
+        if (diff < -maxDelta) diff = -maxDelta;
+        return current + diff;
     }
 
     private PlayerEntity findNearestPlayer(MinecraftClient mc, double range) {
@@ -201,4 +217,4 @@ public class LavaAssistantClient implements ClientModInitializer {
         }
         return nearest;
     }
-}
+                    }
