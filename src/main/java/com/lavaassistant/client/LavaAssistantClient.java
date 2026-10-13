@@ -39,11 +39,11 @@ public class LavaAssistantClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             MinecraftClient mc = MinecraftClient.getInstance();
 
-            if (mc.window == null)
+            if (mc.getWindow() == null)
                 return;
 
-            // Direct GLFW check for 'R' key
-            boolean isPressed = GLFW.glfwGetKey(mc.window.getHandle(), GLFW.GLFW_KEY_R) == GLFW.GLFW_PRESS;
+            // Fixed: mc.getWindow() getter method use kiya hai handle lene ke liye
+            boolean isPressed = GLFW.glfwGetKey(mc.getWindow().getHandle(), GLFW.GLFW_KEY_R) == GLFW.GLFW_PRESS;
             if (isPressed && !wasPressed) {
                 enabled = !enabled;
                 if (!enabled) {
