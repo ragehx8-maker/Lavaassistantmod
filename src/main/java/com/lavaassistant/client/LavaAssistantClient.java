@@ -17,28 +17,26 @@ import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
 public class LavaAssistantClient implements ClientModInitializer {
-    private static boolean enabled = false;
+    public static boolean enabled = false;
+    public static boolean xrayEnabled = false; // Fix for mixin error
     private static KeyBinding toggleKey;
 
     private boolean hasPlaced = false;
     private long lastActionTime = 0;
-    private final long delayMs = 80; // Action delay for silent bypass
+    private final long delayMs = 80;
 
     @Override
     public void onInitializeClient() {
-        // Register 'R' Keybinding to toggle AutoLava
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.lavaassistant.toggle",
-                InputUtil.Type.KEY_SYM,
+                InputUtil.Type.KEYSYM, // Fixed: removed underscore
                 GLFW.GLFW_KEY_R,
                 "category.lavaassistant.general"
         ));
 
-        // Client Tick Event to handle Toggle & AutoLava logic
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             MinecraftClient mc = MinecraftClient.getInstance();
 
-            // Toggle check when 'R' is pressed
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
                 if (mc.player != null) {
@@ -62,30 +60,24 @@ public class LavaAssistantClient implements ClientModInitializer {
                 return;
             }
 
-            // Find nearest player in UHC range (e.g., 4.5 blocks)
             PlayerEntity target = findNearestPlayer(mc, 4.5);
             if (target == null)
                 return;
 
-            // Delay check to prevent spamming packets
             if (System.currentTimeMillis() - lastActionTime < delayMs)
                 return;
 
-            BlockPos targetPos = target.getBlockPos().down(); // Enemy ke pairo ke niche block
+            BlockPos targetPos = target.getBlockPos().down();
             Vec3d hitVec = new Vec3d(targetPos.getX() + 0.5, targetPos.getY() + 1.0, targetPos.getZ() + 0.5);
             BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, targetPos, false);
 
-            // 1. Lava Place karega agar haath mein Lava Bucket hai
             if (holdingLava && !hasPlaced) {
                 if (mc.interactionManager != null) {
-                    // Silent/packet interaction bypass
                     mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
                 }
                 hasPlaced = true;
                 lastActionTime = System.currentTimeMillis();
-            }
-            // 2. Turant wapas lava utha lega agar haath mein empty bucket hai aur lava place ho chuka hai
-            else if (holdingEmptyBucket && hasPlaced) {
+            } else if (holdingEmptyBucket && hasPlaced) {
                 if (mc.interactionManager != null) {
                     mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
                 }
