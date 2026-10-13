@@ -9,6 +9,7 @@ import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
@@ -21,6 +22,8 @@ import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
+
+import java.lang.reflect.Field;
 
 public class LavaAssistantClient implements ClientModInitializer {
     public static boolean enabled = false;
@@ -79,14 +82,14 @@ public class LavaAssistantClient implements ClientModInitializer {
                 if (mc.crosshairTarget != null && mc.crosshairTarget.getType() == HitResult.Type.ENTITY) {
                     Entity entity = ((EntityHitResult) mc.crosshairTarget).getEntity();
                     if (entity instanceof PlayerEntity player) {
-                        // 1. FIRE CHECK: Agar enemy pehle se jal raha hai toh trigger mat karo
+                        // FIRE CHECK: Agar enemy pehle se jal raha hai toh trigger mat karo
                         if (player.isOnFire() || player.getFireTicks() > 0) {
                             keyWasPressed = pressed;
                             return;
                         }
 
                         targetPos = predictLandingPos(mc, player);
-                        if (targetPos != null && isValidPlacement(mc, targetPos))
+                        if (targetPos != null && isValidPlacement(mc, player, targetPos))
                             state = 1;
                         else
                             targetPos = null;
@@ -135,7 +138,7 @@ public class LavaAssistantClient implements ClientModInitializer {
     }
 
     private BlockPos predictLandingPos(MinecraftClient mc, PlayerEntity player) {
-        Vec3d pos = player.getPos();
+        Vec3d pos = player.getEntityPos();
         Vec3d velocity = player.getVelocity();
 
         if (player.isOnGround() && velocity.horizontalLength() < 0.1)
@@ -160,18 +163,18 @@ public class LavaAssistantClient implements ClientModInitializer {
         return new BlockPos((int) Math.floor(pos.x), (int) Math.floor(pos.y), (int) Math.floor(pos.z));
     }
 
-    private boolean isValidPlacement(MinecraftClient mc, BlockPos pos) {
+    private boolean isValidPlacement(MinecraftClient mc, PlayerEntity player, BlockPos pos) {
         BlockPos below = pos.down();
         if (!mc.world.getBlockState(below).isSolidBlock(mc.world, below))
             return false;
         if (!mc.world.getBlockState(pos).isReplaceable() && !mc.world.getBlockState(pos).isAir())
             return false;
         
-        // 2. WATER CHECK: Agar wahan pani hai toh placement block kar do taaki obsidian na bane
+        // WATER CHECK: Pani mein lava dal kar obsidian na bane
         if (mc.world.getFluidState(pos).isOf(Fluids.WATER) || mc.world.getFluidState(pos.down()).isOf(Fluids.WATER))
             return false;
 
-        return mc.player.getPos().squaredDistanceTo(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D) < 25.0D;
+        return player.getEntityPos().squaredDistanceTo(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D) < 25.0D;
     }
 
     private boolean placeLava(MinecraftClient mc) {
@@ -225,11 +228,27 @@ public class LavaAssistantClient implements ClientModInitializer {
         for (int i = 0; i < 9; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
             if (stack.isOf(targetItem)) {
-                mc.player.getInventory().selectedSlot = i;
+                setSelectedSlot(mc.player.getInventory(), i);
                 return true;
             }
         }
         return false;
+    }
+
+    private void setSelectedSlot(PlayerInventory inventory, int slot) {
+        try {
+            Field field = PlayerInventory.class.getDeclaredField("selectedSlot");
+            field.setAccessible(true);
+            field.setInt(inventory, slot);
+        } catch (Exception e) {
+            try {
+                Field field = PlayerInventory.class.getDeclaredField("field_7545");
+                field.setAccessible(true);
+                field.setInt(inventory, slot);
+            } catch (Exception ex) {
+                // ignore
+            }
+        }
     }
 
     private void resetState() {
