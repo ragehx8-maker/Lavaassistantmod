@@ -13,9 +13,12 @@ import net.minecraft.fluid.Fluids;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
+import net.minecraft.registry.tag.FluidTags;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
@@ -29,10 +32,12 @@ public class LavaAssistantClient implements ClientModInitializer {
             KeyBinding.Category.create(Identifier.of("lavaassistant", "main"));
 
     private static final double RANGE = 4.5;
-    private static final int PICKUP_TIMEOUT_TICKS = 40;
+    private static final int PICKUP_TIMEOUT_TICKS = 25;
+    private static final int PLACE_COOLDOWN_TICKS = 15;
 
     private BlockPos placedPos = null;
     private int ticksSincePlace = 0;
+    private int cooldown = 0;
 
     @Override
     public void onInitializeClient() {
@@ -45,7 +50,6 @@ public class LavaAssistantClient implements ClientModInitializer {
                 CATEGORY
         ));
 
-        // Clean HUD positioned at top-left corner so it doesn't block the screen
         HudRenderCallback.EVENT.register((ctx, tickCounter) -> {
             MinecraftClient mc = MinecraftClient.getInstance();
             if (enabled && mc.player != null && mc.currentScreen == null) {
@@ -69,33 +73,71 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (!enabled || mc.player == null || mc.world == null
                     || mc.interactionManager == null || mc.currentScreen != null) return;
 
+            if (cooldown > 0) cooldown--;
+
             Item item = mc.player.getMainHandStack().getItem();
 
-            // ---------- AIMASSIST FOR PLACEMENT (Holding Lava Bucket) ----------
+            // ---------- SILENT AUTO LAVA PLACE ----------
             if (item == Items.LAVA_BUCKET) {
+                if (cooldown > 0) return;
+
                 PlayerEntity target = findNearestPlayer(mc, RANGE);
-                if (target != null && target.isOnGround()) {
-                    Vec3d vel = target.getVelocity();
-                    Vec3d pred = new Vec3d(target.getX(), target.getY(), target.getZ()).add(vel.x * 1.5, 0, vel.z * 1.5);
-                    BlockPos feet = BlockPos.ofFloored(pred.x, target.getY() + 0.01, pred.z);
+                if (target == null || !target.isOnGround()) return;
+                if (target.isTouchingWater()) return;
+                if (target.isOnFire() || target.getFireTicks() > 0) return;
 
-                    // Lock aim at the block under the player's feet
-                    Vec3d aim = new Vec3d(pred.x, feet.getY(), pred.z);
-                    if (mc.player.getEyePos().distanceTo(aim) <= RANGE) {
-                        lookAt(mc, aim);
-                    }
+                Vec3d vel = target.getVelocity();
+                Vec3d pred = new Vec3d(target.getX(), target.getY(), target.getZ()).add(vel.x * 1.5, 0, vel.z * 1.5);
+                BlockPos feet = BlockPos.ofFloored(pred.x, target.getY() + 0.01, pred.z);
 
-                    // Detect when lava is placed at target's feet (by you manually clicking)
-                    FluidState fs = mc.world.getFluidState(feet);
-                    if (fs.isOf(Fluids.LAVA)) {
+                FluidState existingFs = mc.world.getFluidState(feet);
+                if (existingFs.isOf(Fluids.LAVA)) return;
+                if (nearWater(mc, feet)) return;
+
+                Vec3d aim = new Vec3d(pred.x, feet.getY(), pred.z);
+                if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
+
+                // Save original client view angles so screen doesn't move at all
+                float oldYaw = mc.player.getYaw();
+                float oldPitch = mc.player.getPitch();
+
+                // Calculate target look angles
+                Vec3d eye = mc.player.getEyePos();
+                double dx = aim.x - eye.x;
+                double dy = aim.y - eye.y;
+                double dz = aim.z - eye.z;
+                double horizontal = Math.sqrt(dx * dx + dz * dz);
+                float yaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+                float pitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
+
+                // Set temporarily for packet and raycast
+                mc.player.setYaw(yaw);
+                mc.player.setPitch(pitch);
+                if (mc.getNetworkHandler() != null) {
+                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
+                            yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
+                }
+
+                HitResult hr = mc.player.raycast(RANGE, 1.0f, false);
+                if (hr.getType() == HitResult.Type.BLOCK) {
+                    BlockHitResult bhr = (BlockHitResult) hr;
+                    BlockPos willPlace = bhr.getBlockPos().offset(bhr.getSide());
+                    if (willPlace.equals(feet)) {
+                        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+                        mc.player.swingHand(Hand.MAIN_HAND);
                         placedPos = feet;
                         ticksSincePlace = 0;
+                        cooldown = PLACE_COOLDOWN_TICKS;
                     }
                 }
+
+                // Instantly restore original client view so screen remains completely normal
+                mc.player.setYaw(oldYaw);
+                mc.player.setPitch(oldPitch);
                 return;
             }
 
-            // ---------- AUTO PICKUP (Holding Empty Bucket after lava is placed) ----------
+            // ---------- SILENT AUTO PICKUP ----------
             if (item == Items.BUCKET && placedPos != null) {
                 ticksSincePlace++;
 
@@ -105,38 +147,52 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
 
                 FluidState fs = mc.world.getFluidState(placedPos);
-                if (!fs.isOf(Fluids.LAVA) || !fs.isStill()) {
-                    placedPos = null;
-                    return;
-                }
+                if (!fs.isOf(Fluids.LAVA) || !fs.isStill()) return;
 
                 Vec3d aim = Vec3d.ofCenter(placedPos);
-                if (mc.player.getEyePos().distanceTo(aim) <= RANGE) {
-                    lookAt(mc, aim);
-                    mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-                    mc.player.swingHand(Hand.MAIN_HAND);
+                if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
+
+                // Save original client view angles
+                float oldYaw = mc.player.getYaw();
+                float oldPitch = mc.player.getPitch();
+
+                Vec3d eye = mc.player.getEyePos();
+                double dx = aim.x - eye.x;
+                double dy = aim.y - eye.y;
+                double dz = aim.z - eye.z;
+                double horizontal = Math.sqrt(dx * dx + dz * dz);
+                float yaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+                float pitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
+
+                mc.player.setYaw(yaw);
+                mc.player.setPitch(pitch);
+                if (mc.getNetworkHandler() != null) {
+                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
+                            yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
                 }
+
+                mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+                mc.player.swingHand(Hand.MAIN_HAND);
+
+                // Restore original client view
+                mc.player.setYaw(oldYaw);
+                mc.player.setPitch(oldPitch);
+
+                placedPos = null;
+                cooldown = PLACE_COOLDOWN_TICKS;
             }
         });
     }
 
-    private void lookAt(MinecraftClient mc, Vec3d point) {
-        Vec3d eye = mc.player.getEyePos();
-        double dx = point.x - eye.x;
-        double dy = point.y - eye.y;
-        double dz = point.z - eye.z;
-        double horizontal = Math.sqrt(dx * dx + dz * dz);
-
-        float yaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
-        float pitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
-
-        mc.player.setYaw(yaw);
-        mc.player.setPitch(pitch);
-
-        if (mc.getNetworkHandler() != null) {
-            mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                    yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
+    private boolean nearWater(MinecraftClient mc, BlockPos pos) {
+        BlockPos[] check = {
+                pos, pos.up(), pos.down(),
+                pos.north(), pos.south(), pos.east(), pos.west()
+        };
+        for (BlockPos p : check) {
+            if (mc.world.getFluidState(p).isIn(FluidTags.WATER)) return true;
         }
+        return false;
     }
 
     private PlayerEntity findNearestPlayer(MinecraftClient mc, double range) {
@@ -152,4 +208,4 @@ public class LavaAssistantClient implements ClientModInitializer {
         }
         return nearest;
     }
-}
+                    }
