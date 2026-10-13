@@ -33,14 +33,11 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     private static final double RANGE = 4.5;
     private static final int PICKUP_TIMEOUT_TICKS = 25;
-    private static final int PLACE_COOLDOWN_TICKS = 25;
+    private static final int PLACE_COOLDOWN_TICKS = 15;
 
     private BlockPos placedPos = null;
-    private BlockPos waterPlacedPos = null;
     private int ticksSincePlace = 0;
-    private int waterTicksSincePlace = 0;
     private int cooldown = 0;
-    private int checkTimer = 0;
 
     @Override
     public void onInitializeClient() {
@@ -66,7 +63,6 @@ public class LavaAssistantClient implements ClientModInitializer {
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
                 placedPos = null;
-                waterPlacedPos = null;
                 if (mc.player != null) {
                     mc.player.sendMessage(Text.literal(enabled
                             ? "§a[LavaAssistant] §fEnabled!"
@@ -81,110 +77,20 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             Item item = mc.player.getMainHandStack().getItem();
 
-            // ---------- AUTO WATER / SELF-EXTINGUISH (Haath mein Water Bucket hone par) ----------
-            if (mc.player.isOnFire() || mc.player.getFireTicks() > 0) {
-                if (item == Items.BUCKET && waterPlacedPos != null) {
-                    waterTicksSincePlace++;
-                    if (waterTicksSincePlace > PICKUP_TIMEOUT_TICKS) {
-                        waterPlacedPos = null;
-                    } else {
-                        FluidState fs = mc.world.getFluidState(waterPlacedPos);
-                        if (fs.isOf(Fluids.WATER) && fs.isStill()) {
-                            Vec3d aim = Vec3d.ofCenter(waterPlacedPos);
-                            if (mc.player.getEyePos().distanceTo(aim) <= RANGE) {
-                                float oldYaw = mc.player.getYaw();
-                                float oldPitch = mc.player.getPitch();
-
-                                Vec3d eye = mc.player.getEyePos();
-                                double dx = aim.x - eye.x;
-                                double dy = aim.y - eye.y;
-                                double dz = aim.z - eye.z;
-                                double horizontal = Math.sqrt(dx * dx + dz * dz);
-                                float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
-                                float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
-
-                                float smoothedYaw = smoothAngle(oldYaw, targetYaw, 45.0f);
-                                float smoothedPitch = MathHelper.clamp(targetPitch, -90.0f, 90.0f);
-
-                                mc.player.setYaw(smoothedYaw);
-                                mc.player.setPitch(smoothedPitch);
-                                if (mc.getNetworkHandler() != null) {
-                                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                                            smoothedYaw, smoothedPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
-                                }
-
-                                mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-                                mc.player.swingHand(Hand.MAIN_HAND);
-
-                                mc.player.setYaw(oldYaw);
-                                mc.player.setPitch(oldPitch);
-                                waterPlacedPos = null;
-                                return;
-                            }
-                        }
-                    }
-                }
-
-                if (item == Items.WATER_BUCKET) {
-                    BlockPos feet = mc.player.getBlockPos();
-                    FluidState fs = mc.world.getFluidState(feet);
-                    if (!fs.isOf(Fluids.WATER)) {
-                        Vec3d aim = Vec3d.ofBottomCenter(feet);
-                        float oldYaw = mc.player.getYaw();
-                        float oldPitch = mc.player.getPitch();
-
-                        Vec3d eye = mc.player.getEyePos();
-                        double dx = aim.x - eye.x;
-                        double dy = aim.y - eye.y;
-                        double dz = aim.z - eye.z;
-                        double horizontal = Math.sqrt(dx * dx + dz * dz);
-                        float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
-                        float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
-
-                        float smoothedYaw = smoothAngle(oldYaw, targetYaw, 45.0f);
-                        float smoothedPitch = MathHelper.clamp(targetPitch, -90.0f, 90.0f);
-
-                        mc.player.setYaw(smoothedYaw);
-                        mc.player.setPitch(smoothedPitch);
-                        if (mc.getNetworkHandler() != null) {
-                            mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                                    smoothedYaw, smoothedPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
-                        }
-
-                        HitResult hr = mc.player.raycast(RANGE, 1.0f, false);
-                        if (hr.getType() == HitResult.Type.BLOCK) {
-                            BlockHitResult bhr = (BlockHitResult) hr;
-                            BlockPos willPlace = bhr.getBlockPos().offset(bhr.getSide());
-                            if (willPlace.equals(feet)) {
-                                mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-                                mc.player.swingHand(Hand.MAIN_HAND);
-                                waterPlacedPos = feet;
-                                waterTicksSincePlace = 0;
-                            }
-                        }
-
-                        mc.player.setYaw(oldYaw);
-                        mc.player.setPitch(oldPitch);
-                        return;
-                    }
-                }
-            }
-
             // ---------- VULCAN & GRIM BYPASS: SILENT SMOOTH AUTO LAVA PLACE ----------
             if (item == Items.LAVA_BUCKET) {
                 if (cooldown > 0) return;
 
-                checkTimer++;
-                if (checkTimer < 3) return;
-                checkTimer = 0;
-
                 PlayerEntity target = findNearestPlayer(mc, RANGE);
                 if (target == null || !target.isOnGround()) return;
                 if (target.isTouchingWater()) return;
+                
+                // Agar enemy pehle se jal raha hai toh lava mat dalo
                 if (target.isOnFire() || target.getFireTicks() > 0) return;
 
+                // Speed check fixed: Ab normal strafe/fight mein place hoga, sirf tezi se bhagne (sprint) par rukega
                 double speed = target.getVelocity().horizontalLength();
-                if (speed > 0.08) return; 
+                if (speed > 0.28) return; 
 
                 BlockPos feet = target.getBlockPos();
 
@@ -206,7 +112,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
                 float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                float smoothedYaw = smoothAngle(oldYaw, targetYaw, 45.0f);
+                float smoothedYaw = smoothAngle(oldYaw, targetYaw, 60.0f);
                 float smoothedPitch = MathHelper.clamp(targetPitch, -90.0f, 90.0f);
 
                 mc.player.setYaw(smoothedYaw);
@@ -260,7 +166,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
                 float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                float smoothedYaw = smoothAngle(oldYaw, targetYaw, 45.0f);
+                float smoothedYaw = smoothAngle(oldYaw, targetYaw, 60.0f);
                 float smoothedPitch = MathHelper.clamp(targetPitch, -90.0f, 90.0f);
 
                 mc.player.setYaw(smoothedYaw);
@@ -313,4 +219,4 @@ public class LavaAssistantClient implements ClientModInitializer {
         }
         return nearest;
     }
-                    }
+}
