@@ -13,7 +13,6 @@ import net.minecraft.fluid.Fluids;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
-import net.minecraft.registry.tag.FluidTags;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
@@ -33,11 +32,19 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     private static final double RANGE = 4.5;
     private static final int PICKUP_TIMEOUT_TICKS = 25;
-    private static final int PLACE_COOLDOWN_TICKS = 15;
+    private static final int PLACE_COOLDOWN_TICKS = 10;
 
     private BlockPos placedPos = null;
     private int ticksSincePlace = 0;
     private int cooldown = 0;
+
+    // ThunderHack Style Smooth Rotation State Variables
+    private boolean isAnimating = false;
+    private int animStep = 0;
+    private float origYaw, origTargetYaw;
+    private float origPitch, origTargetPitch;
+    private boolean isPlacingAction = true; // true = Place Lava, false = Pickup Lava
+    private BlockPos targetBlockPos = null;
 
     @Override
     public void onInitializeClient() {
@@ -63,6 +70,7 @@ public class LavaAssistantClient implements ClientModInitializer {
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
                 placedPos = null;
+                isAnimating = false;
                 if (mc.player != null) {
                     mc.player.sendMessage(Text.literal(enabled
                             ? "§a[LavaAssistant] §fEnabled!"
@@ -75,72 +83,95 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             if (cooldown > 0) cooldown--;
 
+            // ---------- THUNDERHACK STYLE SMOOTH ANIMATION HANDLER ----------
+            if (isAnimating) {
+                animStep++;
+                
+                // Interpolate smoothly towards target angles over 3 steps
+                float progress = Math.min(1.0f, animStep / 3.0f);
+                float currentYaw = smoothAngle(origYaw, origTargetYaw, 40.0f * animStep);
+                float currentPitch = origPitch + (origTargetPitch - origPitch) * progress;
+
+                mc.player.setYaw(currentYaw);
+                mc.player.setPitch(currentPitch);
+                if (mc.getNetworkHandler() != null) {
+                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
+                            currentYaw, currentPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
+                }
+
+                // On step 3, perform the action (Place or Pickup)
+                if (animStep == 3) {
+                    if (isPlacingAction && targetBlockPos != null) {
+                        HitResult hr = mc.player.raycast(RANGE, 1.0f, false);
+                        if (hr.getType() == HitResult.Type.BLOCK) {
+                            BlockHitResult bhr = (BlockHitResult) hr;
+                            BlockPos willPlace = bhr.getBlockPos().offset(bhr.getSide());
+                            if (willPlace.equals(targetBlockPos) || willPlace.equals(targetBlockPos.down())) {
+                                mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+                                mc.player.swingHand(Hand.MAIN_HAND);
+                                placedPos = targetBlockPos;
+                                ticksSincePlace = 0;
+                                cooldown = PLACE_COOLDOWN_TICKS;
+                            }
+                        }
+                    } else if (!isPlacingAction && placedPos != null) {
+                        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+                        mc.player.swingHand(Hand.MAIN_HAND);
+                        placedPos = null;
+                        cooldown = PLACE_COOLDOWN_TICKS;
+                    }
+                }
+
+                // Finish animation after 5 ticks and restore original view smoothly
+                if (animStep >= 5) {
+                    mc.player.setYaw(origYaw);
+                    mc.player.setPitch(origPitch);
+                    isAnimating = false;
+                }
+                return;
+            }
+
             Item item = mc.player.getMainHandStack().getItem();
 
-            // ---------- VULCAN & GRIM BYPASS: SILENT SMOOTH AUTO LAVA PLACE ----------
+            // ---------- TRIGGER: AUTO LAVA PLACE ----------
             if (item == Items.LAVA_BUCKET) {
                 if (cooldown > 0) return;
 
                 PlayerEntity target = findNearestPlayer(mc, RANGE);
-                if (target == null || !target.isOnGround()) return;
-                if (target.isTouchingWater()) return;
-                
-                // Agar enemy pehle se jal raha hai toh lava mat dalo
+                if (target == null) return;
                 if (target.isOnFire() || target.getFireTicks() > 0) return;
 
-                // Speed check fixed: Ab normal strafe/fight mein place hoga, sirf tezi se bhagne (sprint) par rukega
-                double speed = target.getVelocity().horizontalLength();
-                if (speed > 0.28) return; 
-
-                BlockPos feet = target.getBlockPos();
+                Vec3d vel = target.getVelocity();
+                Vec3d targetPos = new Vec3d(target.getX(), target.getY(), target.getZ());
+                Vec3d pred = targetPos.add(vel.x * 2.2, vel.y * 1.0, vel.z * 2.2);
+                BlockPos feet = BlockPos.ofFloored(pred.x, target.getY(), pred.z);
 
                 FluidState existingFs = mc.world.getFluidState(feet);
                 if (existingFs.isOf(Fluids.LAVA)) return;
-                if (nearWater(mc, feet)) return;
 
                 Vec3d aim = Vec3d.ofBottomCenter(feet);
                 if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
 
-                float oldYaw = mc.player.getYaw();
-                float oldPitch = mc.player.getPitch();
+                // Setup Thunderhack style smooth animation
+                origYaw = mc.player.getYaw();
+                origPitch = mc.player.getPitch();
 
                 Vec3d eye = mc.player.getEyePos();
                 double dx = aim.x - eye.x;
                 double dy = aim.y - eye.y;
                 double dz = aim.z - eye.z;
                 double horizontal = Math.sqrt(dx * dx + dz * dz);
-                float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
-                float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
+                origTargetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+                origTargetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                float smoothedYaw = smoothAngle(oldYaw, targetYaw, 60.0f);
-                float smoothedPitch = MathHelper.clamp(targetPitch, -90.0f, 90.0f);
-
-                mc.player.setYaw(smoothedYaw);
-                mc.player.setPitch(smoothedPitch);
-                if (mc.getNetworkHandler() != null) {
-                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                            smoothedYaw, smoothedPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
-                }
-
-                HitResult hr = mc.player.raycast(RANGE, 1.0f, false);
-                if (hr.getType() == HitResult.Type.BLOCK) {
-                    BlockHitResult bhr = (BlockHitResult) hr;
-                    BlockPos willPlace = bhr.getBlockPos().offset(bhr.getSide());
-                    if (willPlace.equals(feet)) {
-                        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-                        mc.player.swingHand(Hand.MAIN_HAND);
-                        placedPos = feet;
-                        ticksSincePlace = 0;
-                        cooldown = PLACE_COOLDOWN_TICKS;
-                    }
-                }
-
-                mc.player.setYaw(oldYaw);
-                mc.player.setPitch(oldPitch);
+                isPlacingAction = true;
+                targetBlockPos = feet;
+                animStep = 0;
+                isAnimating = true;
                 return;
             }
 
-            // ---------- VULCAN & GRIM BYPASS: SILENT SMOOTH AUTO PICKUP ----------
+            // ---------- TRIGGER: AUTO PICKUP ----------
             if (item == Items.BUCKET && placedPos != null) {
                 ticksSincePlace++;
 
@@ -155,35 +186,20 @@ public class LavaAssistantClient implements ClientModInitializer {
                 Vec3d aim = Vec3d.ofCenter(placedPos);
                 if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
 
-                float oldYaw = mc.player.getYaw();
-                float oldPitch = mc.player.getPitch();
+                origYaw = mc.player.getYaw();
+                origPitch = mc.player.getPitch();
 
                 Vec3d eye = mc.player.getEyePos();
                 double dx = aim.x - eye.x;
                 double dy = aim.y - eye.y;
                 double dz = aim.z - eye.z;
                 double horizontal = Math.sqrt(dx * dx + dz * dz);
-                float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
-                float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
+                origTargetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+                origTargetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                float smoothedYaw = smoothAngle(oldYaw, targetYaw, 60.0f);
-                float smoothedPitch = MathHelper.clamp(targetPitch, -90.0f, 90.0f);
-
-                mc.player.setYaw(smoothedYaw);
-                mc.player.setPitch(smoothedPitch);
-                if (mc.getNetworkHandler() != null) {
-                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                            smoothedYaw, smoothedPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
-                }
-
-                mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-                mc.player.swingHand(Hand.MAIN_HAND);
-
-                mc.player.setYaw(oldYaw);
-                mc.player.setPitch(oldPitch);
-
-                placedPos = null;
-                cooldown = PLACE_COOLDOWN_TICKS;
+                isPlacingAction = false;
+                animStep = 0;
+                isAnimating = true;
             }
         });
     }
@@ -193,17 +209,6 @@ public class LavaAssistantClient implements ClientModInitializer {
         if (diff > maxDelta) diff = maxDelta;
         if (diff < -maxDelta) diff = -maxDelta;
         return current + diff;
-    }
-
-    private boolean nearWater(MinecraftClient mc, BlockPos pos) {
-        BlockPos[] check = {
-                pos, pos.up(), pos.down(),
-                pos.north(), pos.south(), pos.east(), pos.west()
-        };
-        for (BlockPos p : check) {
-            if (mc.world.getFluidState(p).isIn(FluidTags.WATER)) return true;
-        }
-        return false;
     }
 
     private PlayerEntity findNearestPlayer(MinecraftClient mc, double range) {
