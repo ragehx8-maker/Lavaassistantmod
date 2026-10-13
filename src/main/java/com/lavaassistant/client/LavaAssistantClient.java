@@ -8,13 +8,19 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.fluid.FluidState;
+import net.minecraft.fluid.Fluids;
+import net.minecraft.item.Item;
 import net.minecraft.item.Items;
+import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
+import net.minecraft.registry.tag.FluidTags;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
@@ -25,29 +31,27 @@ public class LavaAssistantClient implements ClientModInitializer {
     private static final KeyBinding.Category CATEGORY =
             KeyBinding.Category.create(Identifier.of("lavaassistant", "main"));
 
-    private boolean hasPlaced = false;
-    private long lastActionTime = 0;
-    private final long delayMs = 80;
+    private static final double RANGE = 4.5;
+    private static final int PICKUP_TIMEOUT_TICKS = 15;
+    private static final int PLACE_COOLDOWN_TICKS = 4;
+
+    private BlockPos placedPos = null;
+    private int ticksSincePlace = 0;
+    private int cooldown = 0;
 
     @Override
     public void onInitializeClient() {
         System.out.println("[LavaAssistant] CLIENT LOADED");
 
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-                "key.lavaassistant.toggle",
-                InputUtil.Type.KEYSYM,
-                GLFW.GLFW_KEY_R,
-                CATEGORY
-        ));
+                "key.lavaassistant.toggle", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_R, CATEGORY));
 
-        HudRenderCallback.EVENT.register((drawContext, tickCounter) -> {
+        HudRenderCallback.EVENT.register((ctx, tickCounter) -> {
             MinecraftClient mc = MinecraftClient.getInstance();
             if (enabled && mc.player != null && mc.currentScreen == null) {
                 int w = mc.getWindow().getScaledWidth();
                 int h = mc.getWindow().getScaledHeight();
-                // 0xFFFFFFFF: alpha zaroori hai, warna text invisible
-                drawContext.drawText(mc.textRenderer, "§a[AutoLava: ACTIVE]",
-                        w / 2 - 40, h / 2 + 15, 0xFFFFFFFF, true);
+                ctx.drawText(mc.textRenderer, "§a[AutoLava: ACTIVE]", w / 2 - 45, h / 2 + 15, 0xFFFFFFFF, true);
             }
         });
 
@@ -56,7 +60,7 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
-                if (!enabled) hasPlaced = false;
+                placedPos = null;
                 if (mc.player != null) {
                     mc.player.sendMessage(Text.literal(enabled
                             ? "§a[LavaAssistant] §fAutoLava Enabled!"
@@ -64,49 +68,112 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
             }
 
-            if (!enabled || mc.player == null || mc.world == null || mc.currentScreen != null)
-                return;
+            if (!enabled || mc.player == null || mc.world == null
+                    || mc.interactionManager == null || mc.currentScreen != null) return;
 
-            boolean holdingLava = mc.player.getMainHandStack().getItem() == Items.LAVA_BUCKET;
-            boolean holdingEmptyBucket = mc.player.getMainHandStack().getItem() == Items.BUCKET;
+            if (cooldown > 0) cooldown--;
 
-            if (!holdingLava && !holdingEmptyBucket) {
-                hasPlaced = false;
+            Item item = mc.player.getMainHandStack().getItem();
+
+            // ---------- LAVA PLACE ----------
+            if (item == Items.LAVA_BUCKET) {
+                if (cooldown > 0) return;
+                placedPos = null;
+
+                PlayerEntity target = findNearestPlayer(mc, RANGE);
+                if (target == null || !target.isOnGround()) return;
+                if (target.isTouchingWater()) return; // enemy pani mein hai
+
+                Vec3d vel = target.getVelocity();
+                Vec3d pred = target.getEntityPos().add(vel.x * 2.0, 0, vel.z * 2.0);
+                BlockPos feet = BlockPos.ofFloored(pred.x, target.getY() + 0.01, pred.z);
+                if (nearWater(mc, feet)) return; // pani pe ya bagal mein nahi
+
+                Vec3d aim = new Vec3d(pred.x, feet.getY(), pred.z);
+                if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
+
+                lookAt(mc, aim);
+
+                // Verify: click sach mein usi jagah lava rakhega?
+                HitResult hr = mc.player.raycast(RANGE, 1.0f, false);
+                if (hr.getType() != HitResult.Type.BLOCK) return;
+                BlockHitResult bhr = (BlockHitResult) hr;
+                BlockPos willPlace = bhr.getBlockPos().offset(bhr.getSide());
+                if (!willPlace.equals(feet)) return;
+
+                mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+                mc.player.swingHand(Hand.MAIN_HAND);
+
+                placedPos = feet;
+                ticksSincePlace = 0;
+                cooldown = PLACE_COOLDOWN_TICKS;
                 return;
             }
 
-            PlayerEntity target = findNearestPlayer(mc, 4.5);
-            if (target == null) return;
+            // ---------- LAVA PICKUP ----------
+            if (item == Items.BUCKET && placedPos != null) {
+                ticksSincePlace++;
 
-            if (System.currentTimeMillis() - lastActionTime < delayMs) return;
+                if (ticksSincePlace > PICKUP_TIMEOUT_TICKS) {
+                    placedPos = null;
+                    return;
+                }
 
-            BlockPos targetPos = target.getBlockPos().down();
-            Vec3d hitVec = new Vec3d(targetPos.getX() + 0.5, targetPos.getY() + 1.0, targetPos.getZ() + 0.5);
-            BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, targetPos, false);
+                FluidState fs = mc.world.getFluidState(placedPos);
+                if (!fs.isOf(Fluids.LAVA) || !fs.isStill()) return;
 
-            if (holdingLava && !hasPlaced) {
-                if (mc.interactionManager != null)
-                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
-                hasPlaced = true;
-                lastActionTime = System.currentTimeMillis();
-            } else if (holdingEmptyBucket && hasPlaced) {
-                if (mc.interactionManager != null)
-                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
-                hasPlaced = false;
-                lastActionTime = System.currentTimeMillis();
+                Vec3d aim = Vec3d.ofCenter(placedPos);
+                if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
+
+                lookAt(mc, aim);
+                mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+                mc.player.swingHand(Hand.MAIN_HAND);
+
+                placedPos = null;
+                cooldown = PLACE_COOLDOWN_TICKS;
             }
         });
     }
 
+    private boolean nearWater(MinecraftClient mc, BlockPos pos) {
+        BlockPos[] check = {
+                pos, pos.up(), pos.down(),
+                pos.north(), pos.south(), pos.east(), pos.west()
+        };
+        for (BlockPos p : check) {
+            if (mc.world.getFluidState(p).isIn(FluidTags.WATER)) return true;
+        }
+        return false;
+    }
+
+    private void lookAt(MinecraftClient mc, Vec3d point) {
+        Vec3d eye = mc.player.getEyePos();
+        double dx = point.x - eye.x;
+        double dy = point.y - eye.y;
+        double dz = point.z - eye.z;
+        double horizontal = Math.sqrt(dx * dx + dz * dz);
+
+        float yaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+        float pitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
+
+        mc.player.setYaw(yaw);
+        mc.player.setPitch(pitch);
+
+        if (mc.getNetworkHandler() != null) {
+            mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
+                    yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
+        }
+    }
+
     private PlayerEntity findNearestPlayer(MinecraftClient mc, double range) {
         PlayerEntity nearest = null;
-        double nearestDistanceSq = range * range;
-        for (PlayerEntity player : mc.world.getPlayers()) {
-            if (player == mc.player || player.isSpectator()) continue;
-            double d = mc.player.squaredDistanceTo(player);
-            if (d <= nearestDistanceSq) {
-                nearestDistanceSq = d;
-                nearest = player;
+        double best = range * range;
+        for (PlayerEntity p : mc.world.getPlayers()) {
+            if (p == mc.player || p.isSpectator()) continue;
+            double d = mc.player.squaredDistanceTo(p);
+            if (d <= best) {
+                best = d;
+                nearest = p;
             }
         }
         return nearest;
