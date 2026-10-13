@@ -7,25 +7,20 @@ import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.fluid.FluidState;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
-import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
-import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.text.Text;
+import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.EntityHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
-
-import java.lang.reflect.Field;
 
 public class LavaAssistantClient implements ClientModInitializer {
     public static boolean enabled = false;
@@ -34,16 +29,10 @@ public class LavaAssistantClient implements ClientModInitializer {
     private static final KeyBinding.Category CATEGORY =
             KeyBinding.Category.create(Identifier.of("lavaassistant", "main"));
 
-    private static final double RANGE = 4.5;
-    
-    // State machine variables for anti-cheat bypass
-    private int taskState = 0; // 0: Idle, 1: Prepare & Rotate, 2: Place, 3: Cleanup
-    private int taskTimer = 0;
-    private int originalSlot = 0;
-    private BlockPos targetFeetPos = null;
-    private BlockPos placedLavaPos = null;
-    
-    private int cooldown = 0;
+    private BlockPos targetPos;
+    private int state = 0;
+    private int delayTicks = 0;
+    private boolean keyWasPressed = false;
 
     @Override
     public void onInitializeClient() {
@@ -59,7 +48,7 @@ public class LavaAssistantClient implements ClientModInitializer {
         HudRenderCallback.EVENT.register((ctx, tickCounter) -> {
             MinecraftClient mc = MinecraftClient.getInstance();
             if (enabled && mc.player != null && mc.currentScreen == null) {
-                ctx.drawText(mc.textRenderer, Text.literal("§a[ProLava: ON]"), 10, 10, 0xFFFFFFFF, true);
+                ctx.drawText(mc.textRenderer, Text.literal("§a[Auto Lava: ON]"), 10, 10, 0xFFFFFFFF, true);
             }
         });
 
@@ -68,174 +57,185 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
-                taskState = 0;
-                placedLavaPos = null;
+                resetState();
                 if (mc.player != null) {
                     mc.player.sendMessage(Text.literal(enabled
-                            ? "§a[LavaAssistant] §fPro-Lava Enabled!"
+                            ? "§a[LavaAssistant] §fAuto Lava Enabled!"
                             : "§c[LavaAssistant] §fDisabled!"), false);
                 }
             }
 
-            if (!enabled || mc.player == null || mc.world == null
-                    || mc.interactionManager == null || mc.currentScreen != null) return;
-
-            if (cooldown > 0) cooldown--;
-
-            // ---------- MULTI-TICK STATE MACHINE FOR AUTO LAVA ----------
-            if (taskState > 0) {
-                executeTask(mc);
+            if (!enabled || mc.player == null || mc.world == null || mc.currentScreen != null)
                 return;
-            }
 
-            if (cooldown > 0) return;
+            boolean pressed = toggleKey.isPressed();
 
-            // Trigger when targeting a player
-            if (mc.targetedEntity instanceof PlayerEntity target) {
-                if (target == mc.player || target.isSpectator()) return;
-                if (target.isOnFire() || target.getFireTicks() > 0) return;
+            if (pressed && !keyWasPressed && state == 0) {
+                if (!hasItemInHotbar(mc, Items.LAVA_BUCKET)) {
+                    keyWasPressed = pressed;
+                    return;
+                }
 
-                if (mc.player.distanceTo(target) <= RANGE) {
-                    int lavaSlot = findItemInHotbar(mc, Items.LAVA_BUCKET);
-                    if (lavaSlot != -1) {
-                        Vec3d vel = target.getVelocity();
-                        Vec3d pred = new Vec3d(target.getX() + vel.x * 1.5, target.getY(), target.getZ() + vel.z * 1.5);
-                        BlockPos feet = BlockPos.ofFloored(pred.getX(), target.getY(), pred.getZ());
-                        BlockPos supportPos = feet.down();
+                if (mc.crosshairTarget != null && mc.crosshairTarget.getType() == HitResult.Type.ENTITY) {
+                    Entity entity = ((EntityHitResult) mc.crosshairTarget).getEntity();
+                    if (entity instanceof PlayerEntity player) {
+                        // 1. FIRE CHECK: Agar enemy pehle se jal raha hai toh trigger mat karo
+                        if (player.isOnFire() || player.getFireTicks() > 0) {
+                            keyWasPressed = pressed;
+                            return;
+                        }
 
-                        if (mc.world.getBlockState(supportPos).isAir()) return;
-                        FluidState existingFs = mc.world.getFluidState(feet);
-                        if (existingFs.isOf(Fluids.LAVA)) return;
-
-                        // Start multi-tick task safely
-                        originalSlot = getSelectedSlot(mc.player.getInventory());
-                        targetFeetPos = supportPos;
-                        taskState = 1;
-                        taskTimer = 0;
+                        targetPos = predictLandingPos(mc, player);
+                        if (targetPos != null && isValidPlacement(mc, targetPos))
+                            state = 1;
+                        else
+                            targetPos = null;
                     }
                 }
             }
 
-            // ---------- AUTO PICKUP BUCKET (SMART CHECK) ----------
-            if (placedLavaPos != null && taskState == 0) {
-                FluidState fs = mc.world.getFluidState(placedLavaPos);
-                if (fs.isOf(Fluids.LAVA) && fs.isStill()) {
-                    int bucketSlot = findItemInHotbar(mc, Items.BUCKET);
-                    if (bucketSlot != -1) {
-                        originalSlot = getSelectedSlot(mc.player.getInventory());
-                        targetFeetPos = placedLavaPos;
-                        taskState = 10; // Pickup state
-                        taskTimer = 0;
-                    }
+            keyWasPressed = pressed;
+
+            if (state != 0) {
+                if (delayTicks > 0) {
+                    delayTicks--;
+                } else {
+                    mc.execute(() -> step(mc));
                 }
             }
         });
     }
 
-    private void executeTask(MinecraftClient mc) {
-        taskTimer++;
+    private void step(MinecraftClient mc) {
+        if (mc.player == null || mc.world == null || mc.interactionManager == null)
+            return;
 
-        // Placement Sequence
-        if (taskState >= 1 && taskState <= 3) {
-            int lavaSlot = findItemInHotbar(mc, Items.LAVA_BUCKET);
-            if (lavaSlot == -1) {
-                taskState = 0;
-                return;
+        switch (state) {
+            case 1 -> {
+                if (selectItemFromHotbar(mc, Items.LAVA_BUCKET)) {
+                    state = 2;
+                    delayTicks = 1;
+                } else {
+                    resetState();
+                }
             }
-
-            Vec3d aim = Vec3d.ofCenter(targetFeetPos);
-            Vec3d eye = mc.player.getEyePos();
-            double dx = aim.x - eye.x;
-            double dy = aim.y - eye.y;
-            double dz = aim.z - eye.z;
-            double horizontal = Math.sqrt(dx * dx + dz * dz);
-            float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
-            float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
-
-            if (taskTimer == 1) {
-                // Tick 1: Silent look & slot switch
-                if (mc.getNetworkHandler() != null) {
-                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                            targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
-                    mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(lavaSlot));
+            case 2 -> {
+                if (placeLava(mc)) {
+                    state = 3;
+                    delayTicks = 6; // Lava settle hone ka wait taaki bucket se wapas utha sakein
+                } else {
+                    resetState();
                 }
-                mc.player.setHeadYaw(targetYaw);
-            } else if (taskTimer == 2) {
-                // Tick 2: Place block interaction
-                BlockHitResult bhr = new BlockHitResult(aim, Direction.UP, targetFeetPos, false);
-                mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
-            } else if (taskTimer >= 3) {
-                // Tick 3: Switch back to original slot
-                if (mc.getNetworkHandler() != null) {
-                    mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(originalSlot));
-                }
-                placedLavaPos = targetFeetPos.up();
-                taskState = 0;
-                cooldown = 20; // 1 second cooldown
             }
-        }
-
-        // Pickup Sequence
-        if (taskState >= 10 && taskState <= 12) {
-            int bucketSlot = findItemInHotbar(mc, Items.BUCKET);
-            if (bucketSlot == -1) {
-                taskState = 0;
-                return;
-            }
-
-            Vec3d aim = Vec3d.ofCenter(targetFeetPos);
-            Vec3d eye = mc.player.getEyePos();
-            double dx = aim.x - eye.x;
-            double dy = aim.y - eye.y;
-            double dz = aim.z - eye.z;
-            double horizontal = Math.sqrt(dx * dx + dz * dz);
-            float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
-            float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
-
-            if (taskTimer == 1) {
-                if (mc.getNetworkHandler() != null) {
-                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                            targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
-                    mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(bucketSlot));
-                }
-                mc.player.setHeadYaw(targetYaw);
-            } else if (taskTimer == 2) {
-                BlockHitResult bhr = new BlockHitResult(aim, Direction.UP, targetFeetPos, false);
-                mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
-            } else if (taskTimer >= 3) {
-                if (mc.getNetworkHandler() != null) {
-                    mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(originalSlot));
-                }
-                placedLavaPos = null;
-                taskState = 0;
-                cooldown = 20;
+            case 3 -> {
+                pickLavaBackUp(mc);
+                resetState();
             }
         }
     }
 
-    private int findItemInHotbar(MinecraftClient mc, net.minecraft.item.Item targetItem) {
+    private BlockPos predictLandingPos(MinecraftClient mc, PlayerEntity player) {
+        Vec3d pos = player.getPos();
+        Vec3d velocity = player.getVelocity();
+
+        if (player.isOnGround() && velocity.horizontalLength() < 0.1)
+            return new BlockPos((int) Math.floor(pos.x), (int) Math.floor(pos.y), (int) Math.floor(pos.z));
+
+        double x = pos.x, y = pos.y, z = pos.z;
+        double vx = velocity.x, vy = velocity.y, vz = velocity.z;
+
+        for (int i = 0; i < 20; i++) {
+            vy = (vy - 0.08D) * 0.98D;
+            vx *= 0.91D;
+            vz *= 0.91D;
+            x += vx;
+            y += vy;
+            z += vz;
+
+            BlockPos below = new BlockPos((int) Math.floor(x), (int) Math.floor(y) - 1, (int) Math.floor(z));
+            if (!mc.world.getBlockState(below).isAir())
+                return new BlockPos((int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z));
+        }
+
+        return new BlockPos((int) Math.floor(pos.x), (int) Math.floor(pos.y), (int) Math.floor(pos.z));
+    }
+
+    private boolean isValidPlacement(MinecraftClient mc, BlockPos pos) {
+        BlockPos below = pos.down();
+        if (!mc.world.getBlockState(below).isSolidBlock(mc.world, below))
+            return false;
+        if (!mc.world.getBlockState(pos).isReplaceable() && !mc.world.getBlockState(pos).isAir())
+            return false;
+        
+        // 2. WATER CHECK: Agar wahan pani hai toh placement block kar do taaki obsidian na bane
+        if (mc.world.getFluidState(pos).isOf(Fluids.WATER) || mc.world.getFluidState(pos.down()).isOf(Fluids.WATER))
+            return false;
+
+        return mc.player.getPos().squaredDistanceTo(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D) < 25.0D;
+    }
+
+    private boolean placeLava(MinecraftClient mc) {
+        if (targetPos == null)
+            return false;
+
+        if (!mc.player.getMainHandStack().isOf(Items.LAVA_BUCKET))
+            return false;
+
+        lookAt(mc, targetPos.down().toCenterPos().add(0.0D, 0.5D, 0.0D));
+        ActionResult result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+        if (result.isAccepted()) {
+            mc.player.swingHand(Hand.MAIN_HAND);
+            return true;
+        }
+        return false;
+    }
+
+    private void pickLavaBackUp(MinecraftClient mc) {
+        if (targetPos == null)
+            return;
+
+        if (!hasItemInHotbar(mc, Items.BUCKET))
+            return;
+
+        if (selectItemFromHotbar(mc, Items.BUCKET)) {
+            lookAt(mc, targetPos.toCenterPos());
+            ActionResult result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+            if (result.isAccepted())
+                mc.player.swingHand(Hand.MAIN_HAND);
+        }
+    }
+
+    private void lookAt(MinecraftClient mc, Vec3d target) {
+        Vec3d delta = target.subtract(mc.player.getEyePos());
+        double horizontal = delta.horizontalLength();
+        mc.player.setYaw((float) Math.toDegrees(Math.atan2(-delta.x, delta.z)));
+        mc.player.setPitch((float) (-Math.toDegrees(Math.atan2(delta.y, horizontal))));
+    }
+
+    private boolean hasItemInHotbar(MinecraftClient mc, net.minecraft.item.Item targetItem) {
+        for (int i = 0; i < 9; i++) {
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            if (stack.isOf(targetItem))
+                return true;
+        }
+        return false;
+    }
+
+    private boolean selectItemFromHotbar(MinecraftClient mc, net.minecraft.item.Item targetItem) {
         for (int i = 0; i < 9; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
             if (stack.isOf(targetItem)) {
-                return i;
+                mc.player.getInventory().selectedSlot = i;
+                return true;
             }
         }
-        return -1;
+        return false;
     }
 
-    private int getSelectedSlot(PlayerInventory inventory) {
-        try {
-            Field field = PlayerInventory.class.getDeclaredField("selectedSlot");
-            field.setAccessible(true);
-            return field.getInt(inventory);
-        } catch (Exception e) {
-            try {
-                Field field = PlayerInventory.class.getDeclaredField("field_7545");
-                field.setAccessible(true);
-                return field.getInt(inventory);
-            } catch (Exception ex) {
-                return 0;
-            }
-        }
+    private void resetState() {
+        targetPos = null;
+        state = 0;
+        delayTicks = 0;
+        keyWasPressed = false;
     }
-                }
+}
