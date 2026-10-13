@@ -15,8 +15,6 @@ import net.minecraft.item.Items;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
@@ -30,11 +28,7 @@ public class LavaAssistantClient implements ClientModInitializer {
             KeyBinding.Category.create(Identifier.of("lavaassistant", "main"));
 
     private static final double RANGE = 4.5;
-    private static final int PICKUP_TIMEOUT_TICKS = 25;
-    private static final int PLACE_COOLDOWN_TICKS = 10;
-
-    private BlockPos placedPos = null;
-    private int ticksSincePlace = 0;
+    private static final int COOLDOWN_TICKS = 8;
     private int cooldown = 0;
 
     @Override
@@ -60,7 +54,6 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
-                placedPos = null;
                 if (mc.player != null) {
                     mc.player.sendMessage(Text.literal(enabled
                             ? "§a[LavaAssistant] §fEnabled!"
@@ -75,14 +68,12 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             Item item = mc.player.getMainHandStack().getItem();
 
-            // ---------- CLICK AIMASSIST: PLACES WHEN YOU CLICK/USE LAVA BUCKET ----------
-            if (item == Items.LAVA_BUCKET && mc.options.useKey.isPressed()) {
-                if (cooldown > 0) return;
-
+            // ---------- 1. AIMASSIST ONLY WHEN HOLDING LAVA BUCKET (MANUAL PLACE) ----------
+            if (item == Items.LAVA_BUCKET) {
                 PlayerEntity target = findNearestPlayer(mc, RANGE);
                 if (target == null) return;
-                
-                // Fire Check: Agar enemy pehle se jal raha hai toh lava mat dalo
+
+                // Fire Check: Agar enemy pehle se jal raha hai toh aimassist trigger mat karo
                 if (target.isOnFire() || target.getFireTicks() > 0) return;
 
                 // Motion prediction for moving enemies
@@ -90,9 +81,6 @@ public class LavaAssistantClient implements ClientModInitializer {
                 Vec3d targetPos = new Vec3d(target.getX(), target.getY(), target.getZ());
                 Vec3d pred = targetPos.add(vel.x * 1.8, vel.y * 0.5, vel.z * 1.8);
                 BlockPos feet = BlockPos.ofFloored(pred.x, target.getY(), pred.z);
-
-                FluidState existingFs = mc.world.getFluidState(feet);
-                if (existingFs.isOf(Fluids.LAVA)) return;
 
                 Vec3d aim = Vec3d.ofBottomCenter(feet);
                 if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
@@ -105,45 +93,31 @@ public class LavaAssistantClient implements ClientModInitializer {
                 float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
                 float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
-                // Smooth click-aimassist snap towards enemy feet
+                // Smooth aimassist rotation towards enemy feet (Character won't freeze or lag)
                 float currentYaw = mc.player.getYaw();
                 float currentPitch = mc.player.getPitch();
 
-                float newYaw = smoothAngle(currentYaw, targetYaw, 90.0f);
-                float newPitch = MathHelper.clamp(currentPitch + MathHelper.wrapDegrees(targetPitch - currentPitch) * 0.8f, -90.0f, 90.0f);
+                float newYaw = smoothAngle(currentYaw, targetYaw, 60.0f);
+                float newPitch = MathHelper.clamp(currentPitch + MathHelper.wrapDegrees(targetPitch - currentPitch) * 0.5f, -90.0f, 90.0f);
 
                 mc.player.setYaw(newYaw);
                 mc.player.setPitch(newPitch);
                 mc.player.setHeadYaw(newYaw);
-
-                HitResult hr = mc.player.raycast(RANGE, 1.0f, false);
-                if (hr.getType() == HitResult.Type.BLOCK) {
-                    BlockHitResult bhr = (BlockHitResult) hr;
-                    BlockPos willPlace = bhr.getBlockPos().offset(bhr.getSide());
-                    if (willPlace.equals(feet) || willPlace.equals(target.getBlockPos())) {
-                        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-                        mc.player.swingHand(Hand.MAIN_HAND);
-                        placedPos = feet;
-                        ticksSincePlace = 0;
-                        cooldown = PLACE_COOLDOWN_TICKS;
-                    }
-                }
                 return;
             }
 
-            // ---------- AUTO PICKUP WHEN HOLDING EMPTY BUCKET ----------
-            if (item == Items.BUCKET && placedPos != null) {
-                ticksSincePlace++;
+            // ---------- 2. AUTO PICKUP WHEN HOLDING EMPTY BUCKET ----------
+            if (item == Items.BUCKET) {
+                if (cooldown > 0) return;
 
-                if (ticksSincePlace > PICKUP_TIMEOUT_TICKS) {
-                    placedPos = null;
-                    return;
-                }
+                PlayerEntity target = findNearestPlayer(mc, RANGE);
+                if (target == null) return;
 
-                FluidState fs = mc.world.getFluidState(placedPos);
+                BlockPos feet = BlockPos.ofFloored(target.getX(), target.getY(), target.getZ());
+                FluidState fs = mc.world.getFluidState(feet);
                 if (!fs.isOf(Fluids.LAVA) || !fs.isStill()) return;
 
-                Vec3d aim = Vec3d.ofCenter(placedPos);
+                Vec3d aim = Vec3d.ofCenter(feet);
                 if (mc.player.getEyePos().distanceTo(aim) > RANGE) return;
 
                 Vec3d eye = mc.player.getEyePos();
@@ -154,21 +128,21 @@ public class LavaAssistantClient implements ClientModInitializer {
                 float targetYaw = (float) (MathHelper.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
                 float targetPitch = (float) -(MathHelper.atan2(dy, horizontal) * 180.0 / Math.PI);
 
+                // Smoothly aim at the placed lava block
                 float currentYaw = mc.player.getYaw();
                 float currentPitch = mc.player.getPitch();
 
-                float newYaw = smoothAngle(currentYaw, targetYaw, 90.0f);
-                float newPitch = MathHelper.clamp(currentPitch + MathHelper.wrapDegrees(targetPitch - currentPitch) * 0.8f, -90.0f, 90.0f);
+                float newYaw = smoothAngle(currentYaw, targetYaw, 60.0f);
+                float newPitch = MathHelper.clamp(currentPitch + MathHelper.wrapDegrees(targetPitch - currentPitch) * 0.5f, -90.0f, 90.0f);
 
                 mc.player.setYaw(newYaw);
                 mc.player.setPitch(newPitch);
                 mc.player.setHeadYaw(newYaw);
 
-                if (Math.abs(MathHelper.wrapDegrees(targetYaw - newYaw)) < 15.0f) {
+                if (Math.abs(MathHelper.wrapDegrees(targetYaw - newYaw)) < 10.0f) {
                     mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
                     mc.player.swingHand(Hand.MAIN_HAND);
-                    placedPos = null;
-                    cooldown = PLACE_COOLDOWN_TICKS;
+                    cooldown = COOLDOWN_TICKS;
                 }
             }
         });
