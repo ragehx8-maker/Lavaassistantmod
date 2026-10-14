@@ -14,6 +14,7 @@ import net.minecraft.fluid.FluidState;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.block.Blocks;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
@@ -53,20 +54,19 @@ public class LavaAssistantClient implements ClientModInitializer {
         HudRenderCallback.EVENT.register((ctx, tickCounter) -> {
             MinecraftClient mc = MinecraftClient.getInstance();
             if (enabled && mc.player != null && mc.currentScreen == null) {
-                ctx.drawText(mc.textRenderer, Text.literal("§a[Auto Lava: ACTIVE]"), 10, 10, 0xFFFFFFFF, true);
+                ctx.drawText(mc.textRenderer, Text.literal("§a[Auto Lava: SAFE ACTIVE]"), 10, 10, 0xFFFFFFFF, true);
             }
         });
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             MinecraftClient mc = MinecraftClient.getInstance();
 
-            // Sirf ek baar R dabane par Toggle ON/OFF hoga
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
                 resetState();
                 if (mc.player != null) {
                     mc.player.sendMessage(Text.literal(enabled
-                            ? "§a[LavaAssistant] §fAuto Lava Enabled! (No need to hold R)"
+                            ? "§a[LavaAssistant] §fSafe Auto Lava Enabled!"
                             : "§c[LavaAssistant] §fDisabled!"), false);
                 }
             }
@@ -76,7 +76,18 @@ public class LavaAssistantClient implements ClientModInitializer {
 
             if (cooldown > 0) cooldown--;
 
-            // Agar state machine chal rahi hai, toh steps execute karo
+            // BACKGROUND FAIL-SAFE PICKUP: Aas-paas pada un-picked lava turant uthane ke liye
+            if (state == 0 && cooldown == 0 && hasItemInHotbar(mc, Items.BUCKET)) {
+                BlockPos nearbyLava = findNearbyLava(mc, 3.5);
+                if (nearbyLava != null) {
+                    targetPos = nearbyLava;
+                    originalSlot = getSelectedSlot(mc.player.getInventory());
+                    state = 3;
+                    delayTicks = 0;
+                    return;
+                }
+            }
+
             if (state != 0) {
                 if (delayTicks > 0) {
                     delayTicks--;
@@ -86,7 +97,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 return;
             }
 
-            // CROSSHAIR TARGET CHECK: Jab toggle ON hai aur crosshair enemy par hai
+            // CROSSHAIR TARGET CHECK
             if (cooldown == 0 && state == 0) {
                 if (!hasItemInHotbar(mc, Items.LAVA_BUCKET))
                     return;
@@ -97,14 +108,14 @@ public class LavaAssistantClient implements ClientModInitializer {
                         if (player == mc.player || player.isSpectator() || !player.isAlive())
                             return;
 
-                        // FIRE CHECK: Agar enemy pehle se jal raha hai toh skip karo
+                        // FIRE CHECK
                         if (player.isOnFire() || player.getFireTicks() > 0)
                             return;
 
                         targetPos = predictLandingPos(mc, player);
                         if (targetPos != null && isValidPlacement(mc, player, targetPos)) {
                             originalSlot = getSelectedSlot(mc.player.getInventory());
-                            state = 1; // Turant lava placement start ho jayegi!
+                            state = 1; 
                         } else {
                             targetPos = null;
                         }
@@ -120,7 +131,6 @@ public class LavaAssistantClient implements ClientModInitializer {
 
         switch (state) {
             case 1 -> {
-                // Hotbar se lava bucket select karo
                 if (selectItemFromHotbar(mc, Items.LAVA_BUCKET)) {
                     state = 2;
                     delayTicks = 1;
@@ -129,21 +139,23 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
             }
             case 2 -> {
-                // Lava place karo aur TURANT sword par wapas switch ho jao
                 if (placeLava(mc)) {
-                    setSelectedSlot(mc.player.getInventory(), originalSlot);
-                    state = 3;
-                    delayTicks = 12; // Lava spread aur settle hone ka wait
+                    state = 25;
+                    delayTicks = 2; // Server packet safety delay
                 } else {
                     setSelectedSlot(mc.player.getInventory(), originalSlot);
                     resetState();
                 }
             }
+            case 25 -> {
+                setSelectedSlot(mc.player.getInventory(), originalSlot); // Instant switch back to sword
+                state = 3;
+                delayTicks = 15; // Wait for lava spread
+            }
             case 3 -> {
-                // Lava ko wapas bucket mein uthao
                 if (targetPos != null) {
                     FluidState fs = mc.world.getFluidState(targetPos);
-                    if (fs.isOf(Fluids.LAVA)) {
+                    if (fs.isOf(Fluids.LAVA) || mc.world.getBlockState(targetPos).getBlock() == Blocks.LAVA) {
                         if (selectItemFromHotbar(mc, Items.BUCKET)) {
                             lookAt(mc, targetPos.toCenterPos());
                             ActionResult result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
@@ -153,11 +165,29 @@ public class LavaAssistantClient implements ClientModInitializer {
                         }
                     }
                 }
-                setSelectedSlot(mc.player.getInventory(), originalSlot); // Switch back to sword after pickup
+                setSelectedSlot(mc.player.getInventory(), originalSlot);
                 resetState();
-                cooldown = 10; // Fast cooldown taaki next time turant kaam kare
+                cooldown = 10;
             }
         }
+    }
+
+    private BlockPos findNearbyLava(MinecraftClient mc, double range) {
+        BlockPos playerPos = mc.player.getBlockPos();
+        int r = (int) Math.ceil(range);
+        for (int x = -r; x <= r; x++) {
+            for (int y = -2; y <= 2; y++) {
+                for (int z = -r; z <= r; z++) {
+                    BlockPos p = playerPos.add(x, y, z);
+                    FluidState fs = mc.world.getFluidState(p);
+                    if ((fs.isOf(Fluids.LAVA) || mc.world.getBlockState(p).getBlock() == Blocks.LAVA) &&
+                        mc.player.getEntityPos().squaredDistanceTo(p.getX() + 0.5, p.getY() + 0.5, p.getZ() + 0.5) <= range * range) {
+                        return p;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private BlockPos predictLandingPos(MinecraftClient mc, PlayerEntity player) {
@@ -193,9 +223,21 @@ public class LavaAssistantClient implements ClientModInitializer {
         if (!mc.world.getBlockState(pos).isReplaceable() && !mc.world.getBlockState(pos).isAir())
             return false;
         
-        // WATER CHECK: Obsidian banne se rokne ke liye
-        if (mc.world.getFluidState(pos).isOf(Fluids.WATER) || mc.world.getFluidState(pos.down()).isOf(Fluids.WATER))
+        // WATER CHECK: Pani par lava na gire
+        FluidState fluidPos = mc.world.getFluidState(pos);
+        FluidState fluidBelow = mc.world.getFluidState(below);
+        if (fluidPos.isOf(Fluids.WATER) || fluidPos.isOf(Fluids.FLOWING_WATER) ||
+            fluidBelow.isOf(Fluids.WATER) || fluidBelow.isOf(Fluids.FLOWING_WATER) ||
+            mc.world.getBlockState(pos).getBlock() == Blocks.WATER ||
+            mc.world.getBlockState(below).getBlock() == Blocks.WATER) {
             return false;
+        }
+
+        // SELF-PROTECTION CHECK: Apne aap ko jalane se bachane ke liye (Agar target block khud ke paas ya pairo ke neeche hai)
+        Vec3d playerPos = mc.player.getEntityPos();
+        if (playerPos.squaredDistanceTo(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D) < 2.0D) {
+            return false;
+        }
 
         return player.getEntityPos().squaredDistanceTo(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D) < 25.0D;
     }
@@ -280,4 +322,4 @@ public class LavaAssistantClient implements ClientModInitializer {
         state = 0;
         delayTicks = 0;
     }
-}
+        }
