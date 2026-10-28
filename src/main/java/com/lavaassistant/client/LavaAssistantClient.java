@@ -14,6 +14,7 @@ import net.minecraft.fluid.Fluids;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.block.Blocks;
+import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
@@ -124,7 +125,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
             }
             case 2 -> {
-                // Lava place karo
+                // Lava place karo (Silent rotation ke sath)
                 if (placeLava(mc)) {
                     state = 25;
                     delayTicks = 1; // Server packet safety delay
@@ -145,11 +146,13 @@ public class LavaAssistantClient implements ClientModInitializer {
                     FluidState fs = mc.world.getFluidState(targetPos);
                     if (fs.isOf(Fluids.LAVA) || mc.world.getBlockState(targetPos).getBlock() == Blocks.LAVA) {
                         if (selectItemFromHotbar(mc, Items.BUCKET)) {
-                            lookAt(mc, targetPos.toCenterPos());
-                            ActionResult result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-                            if (result.isAccepted()) {
-                                mc.player.swingHand(Hand.MAIN_HAND);
-                            }
+                            Vec3d target = targetPos.toCenterPos();
+                            performSilentAction(mc, target, () -> {
+                                ActionResult result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+                                if (result.isAccepted()) {
+                                    mc.player.swingHand(Hand.MAIN_HAND);
+                                }
+                            });
                         }
                     }
                 }
@@ -240,20 +243,37 @@ public class LavaAssistantClient implements ClientModInitializer {
         if (!mc.player.getMainHandStack().isOf(Items.LAVA_BUCKET))
             return false;
 
-        lookAt(mc, targetPos.down().toCenterPos().add(0.0D, 0.5D, 0.0D));
-        ActionResult result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-        if (result.isAccepted()) {
-            mc.player.swingHand(Hand.MAIN_HAND);
-            return true;
-        }
-        return false;
+        Vec3d target = targetPos.down().toCenterPos().add(0.0D, 0.5D, 0.0D);
+        return performSilentAction(mc, target, () -> {
+            ActionResult result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+            if (result.isAccepted()) {
+                mc.player.swingHand(Hand.MAIN_HAND);
+            }
+        });
     }
 
-    private void lookAt(MinecraftClient mc, Vec3d target) {
+    private boolean performSilentAction(MinecraftClient mc, Vec3d target, Runnable action) {
+        if (mc.player == null || mc.getNetworkHandler() == null)
+            return false;
+
+        float realYaw = mc.player.getYaw();
+        float realPitch = mc.player.getPitch();
+
         Vec3d delta = target.subtract(mc.player.getEyePos());
         double horizontal = delta.horizontalLength();
-        mc.player.setYaw((float) Math.toDegrees(Math.atan2(-delta.x, delta.z)));
-        mc.player.setPitch((float) (-Math.toDegrees(Math.atan2(delta.y, horizontal))));
+        float targetYaw = (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
+        float targetPitch = (float) (-Math.toDegrees(Math.atan2(delta.y, horizontal)));
+
+        // 1. Server ko target rotation bhejo (taaki doosro ko head niche jata dikhe)
+        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(targetYaw, targetPitch, mc.player.isOnGround()));
+
+        // 2. Action execute karo (Lava place ya pickup)
+        action.run();
+
+        // 3. Turant real rotation wapas bhej do taaki client screen stable rahe
+        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(realYaw, realPitch, mc.player.isOnGround()));
+
+        return true;
     }
 
     private boolean hasItemInHotbar(MinecraftClient mc, net.minecraft.item.Item targetItem) {
@@ -313,4 +333,4 @@ public class LavaAssistantClient implements ClientModInitializer {
         state = 0;
         delayTicks = 0;
     }
-                        }
+                            }
