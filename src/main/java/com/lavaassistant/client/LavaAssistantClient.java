@@ -264,14 +264,14 @@ public class LavaAssistantClient implements ClientModInitializer {
         float targetYaw = (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
         float targetPitch = (float) (-Math.toDegrees(Math.atan2(delta.y, horizontal)));
 
-        // 1. Server ko target rotation bhejo (taaki doosro ko head niche jata dikhe)
-        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(targetYaw, targetPitch, mc.player.isOnGround()));
+        // 1. Server ko target rotation bhejo
+        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
 
-        // 2. Action execute karo (Lava place ya pickup)
+        // 2. Action execute karo
         action.run();
 
         // 3. Turant real rotation wapas bhej do taaki client screen stable rahe
-        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(realYaw, realPitch, mc.player.isOnGround()));
+        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(realYaw, realPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
 
         return true;
     }
@@ -333,4 +333,4 @@ public class LavaAssistantClient implements ClientModInitializer {
         state = 0;
         delayTicks = 0;
     }
-                            }
+}
