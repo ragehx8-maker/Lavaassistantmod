@@ -39,7 +39,7 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        System.out.println("[LavaAssistant] CLIENT LOADED");
+        System.out.println("[LavaAssistant] TRUE SILENT FAST MODE LOADED");
 
         triggerKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.lavaassistant.trigger",
@@ -54,7 +54,6 @@ public class LavaAssistantClient implements ClientModInitializer {
             if (mc.player == null || mc.world == null || mc.currentScreen != null)
                 return;
 
-            // Agar state machine chal rahi hai, toh steps execute karo
             if (state != 0) {
                 if (delayTicks > 0) {
                     delayTicks--;
@@ -64,14 +63,14 @@ public class LavaAssistantClient implements ClientModInitializer {
                 return;
             }
 
-            // 1. FULLY AUTOMATIC NEARBY LAVA PICKUP (Bina key dabaye kaam karega!)
+            // 1. FULLY AUTOMATIC NEARBY LAVA PICKUP (Silent & Fast)
             if (hasItemInHotbar(mc, Items.BUCKET)) {
                 BlockPos nearbyLava = findNearbyLava(mc, 4.0);
                 if (nearbyLava != null) {
                     targetPos = nearbyLava;
                     originalSlot = getSelectedSlot(mc.player.getInventory());
-                    state = 3; // Direct pickup sequence start
-                    delayTicks = 0;
+                    state = 3; 
+                    delayTicks = 0; 
                     return;
                 }
             }
@@ -89,7 +88,6 @@ public class LavaAssistantClient implements ClientModInitializer {
                         if (player == mc.player || player.isSpectator() || !player.isAlive())
                             return;
 
-                        // FIRE CHECK
                         if (player.isOnFire() || player.getFireTicks() > 0) {
                             mc.player.sendMessage(Text.literal("§e[LavaAssistant] Target is already on fire!"), true);
                             return;
@@ -98,7 +96,8 @@ public class LavaAssistantClient implements ClientModInitializer {
                         targetPos = predictLandingPos(mc, player);
                         if (targetPos != null && isValidPlacement(mc, player, targetPos)) {
                             originalSlot = getSelectedSlot(mc.player.getInventory());
-                            state = 1; // Lava placement sequence start!
+                            state = 1; 
+                            delayTicks = 0; 
                         } else {
                             mc.player.sendMessage(Text.literal("§c[LavaAssistant] Invalid spot (Water or unsafe)!"), true);
                         }
@@ -111,12 +110,13 @@ public class LavaAssistantClient implements ClientModInitializer {
     }
 
     private void step(MinecraftClient mc) {
-        if (mc.player == null || mc.world == null || mc.interactionManager == null)
+        if (mc.player == null || mc.world == null || mc.interactionManager == null) {
+            resetState();
             return;
+        }
 
         switch (state) {
             case 1 -> {
-                // Hotbar se lava bucket select karo
                 if (selectItemFromHotbar(mc, Items.LAVA_BUCKET)) {
                     state = 2;
                     delayTicks = 1;
@@ -125,7 +125,6 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
             }
             case 2 -> {
-                // Lava place karo
                 if (placeLava(mc)) {
                     state = 25;
                     delayTicks = 1; 
@@ -135,13 +134,11 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
             }
             case 25 -> {
-                // Turant sword par wapas switch ho jao
                 setSelectedSlot(mc.player.getInventory(), originalSlot);
                 state = 3;
-                delayTicks = 8; // Lava spread hone ka wait
+                delayTicks = 6; // Fast optimal wait for lava damage
             }
             case 3 -> {
-                // Lava ko wapas bucket mein uthao
                 if (targetPos != null) {
                     FluidState fs = mc.world.getFluidState(targetPos);
                     if (fs.isOf(Fluids.LAVA) || mc.world.getBlockState(targetPos).getBlock() == Blocks.LAVA) {
@@ -262,8 +259,19 @@ public class LavaAssistantClient implements ClientModInitializer {
         float targetYaw = (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
         float targetPitch = (float) (-Math.toDegrees(Math.atan2(delta.y, horizontal)));
 
+        // 1. Temporarily set client angles so interaction raycast succeeds without visual delay
+        mc.player.setYaw(targetYaw);
+        mc.player.setPitch(targetPitch);
+
+        // 2. Send rotation packet to server
         mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
+
+        // 3. Execute action (place / pickup)
         action.run();
+
+        // 4. Instantly restore real angles in the same tick so screen never jerks/shakes
+        mc.player.setYaw(realYaw);
+        mc.player.setPitch(realPitch);
         mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(realYaw, realPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
 
         return true;
