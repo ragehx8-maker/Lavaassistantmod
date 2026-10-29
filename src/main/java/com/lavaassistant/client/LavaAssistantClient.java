@@ -64,20 +64,20 @@ public class LavaAssistantClient implements ClientModInitializer {
                 return;
             }
 
-            // KEY PRESS TRIGGER: Jab R dabayenge tabhi action start hoga
-            if (triggerKey.wasPressed()) {
-                // Pehle check karo ki kahin aas-paas un-picked lava toh nahi pada? Agar hai toh pehle wahi utha lo!
-                if (hasItemInHotbar(mc, Items.BUCKET)) {
-                    BlockPos nearbyLava = findNearbyLava(mc, 4.0);
-                    if (nearbyLava != null) {
-                        targetPos = nearbyLava;
-                        originalSlot = getSelectedSlot(mc.player.getInventory());
-                        state = 3;
-                        delayTicks = 0;
-                        return;
-                    }
+            // 1. FULLY AUTOMATIC NEARBY LAVA PICKUP (Bina key dabaye kaam karega!)
+            if (hasItemInHotbar(mc, Items.BUCKET)) {
+                BlockPos nearbyLava = findNearbyLava(mc, 4.0);
+                if (nearbyLava != null) {
+                    targetPos = nearbyLava;
+                    originalSlot = getSelectedSlot(mc.player.getInventory());
+                    state = 3; // Direct pickup sequence start
+                    delayTicks = 0;
+                    return;
                 }
+            }
 
+            // 2. MANUAL KEY PRESS TRIGGER (`R` Key for Player Lava Placement)
+            if (triggerKey.wasPressed()) {
                 if (!hasItemInHotbar(mc, Items.LAVA_BUCKET)) {
                     mc.player.sendMessage(Text.literal("§c[LavaAssistant] Lava Bucket not found in hotbar!"), true);
                     return;
@@ -125,20 +125,20 @@ public class LavaAssistantClient implements ClientModInitializer {
                 }
             }
             case 2 -> {
-                // Lava place karo (Silent rotation ke sath)
+                // Lava place karo
                 if (placeLava(mc)) {
                     state = 25;
-                    delayTicks = 1; // Server packet safety delay
+                    delayTicks = 1; 
                 } else {
                     setSelectedSlot(mc.player.getInventory(), originalSlot);
                     resetState();
                 }
             }
             case 25 -> {
-                // TURANT sword par wapas switch ho jao taaki fight disturb na ho
+                // Turant sword par wapas switch ho jao
                 setSelectedSlot(mc.player.getInventory(), originalSlot);
                 state = 3;
-                delayTicks = 8; // Lava spread aur settle hone ka wait
+                delayTicks = 8; // Lava spread hone ka wait
             }
             case 3 -> {
                 // Lava ko wapas bucket mein uthao
@@ -156,7 +156,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                         }
                     }
                 }
-                setSelectedSlot(mc.player.getInventory(), originalSlot); // Switch back to sword after pickup
+                setSelectedSlot(mc.player.getInventory(), originalSlot);
                 resetState();
             }
         }
@@ -213,7 +213,6 @@ public class LavaAssistantClient implements ClientModInitializer {
         if (!mc.world.getBlockState(pos).isReplaceable() && !mc.world.getBlockState(pos).isAir())
             return false;
         
-        // STRICT WATER CHECK: Pani par lava na gire
         for (int dx = -1; dx <= 1; dx++) {
             for (int dy = -1; dy <= 1; dy++) {
                 for (int dz = -1; dz <= 1; dz++) {
@@ -227,7 +226,6 @@ public class LavaAssistantClient implements ClientModInitializer {
             }
         }
 
-        // SELF-PROTECTION CHECK: Apne aap ko jalane se bachane ke liye
         Vec3d playerPos = mc.player.getEntityPos();
         if (playerPos.squaredDistanceTo(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D) < 2.0D) {
             return false;
@@ -243,7 +241,7 @@ public class LavaAssistantClient implements ClientModInitializer {
         if (!mc.player.getMainHandStack().isOf(Items.LAVA_BUCKET))
             return false;
 
-        Vec3d target = targetPos.down().toCenterPos().add(0.0D, 0.5D, 0.0D);
+        Vec3d target = targetPos.toCenterPos();
         return performSilentAction(mc, target, () -> {
             ActionResult result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
             if (result.isAccepted()) {
@@ -264,13 +262,8 @@ public class LavaAssistantClient implements ClientModInitializer {
         float targetYaw = (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
         float targetPitch = (float) (-Math.toDegrees(Math.atan2(delta.y, horizontal)));
 
-        // 1. Server ko target rotation bhejo
         mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
-
-        // 2. Action execute karo
         action.run();
-
-        // 3. Turant real rotation wapas bhej do taaki client screen stable rahe
         mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(realYaw, realPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
 
         return true;
