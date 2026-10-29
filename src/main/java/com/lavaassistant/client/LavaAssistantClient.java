@@ -39,7 +39,7 @@ public class LavaAssistantClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        System.out.println("[LavaAssistant] TRUE SILENT FAST MODE LOADED");
+        System.out.println("[LavaAssistant] FINAL PERFECT MODE LOADED");
 
         triggerKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.lavaassistant.trigger",
@@ -63,7 +63,7 @@ public class LavaAssistantClient implements ClientModInitializer {
                 return;
             }
 
-            // 1. FULLY AUTOMATIC NEARBY LAVA PICKUP (Silent & Fast)
+            // 1. FULLY AUTOMATIC NEARBY LAVA PICKUP (Silent & Accurate)
             if (hasItemInHotbar(mc, Items.BUCKET)) {
                 BlockPos nearbyLava = findNearbyLava(mc, 4.0);
                 if (nearbyLava != null) {
@@ -136,7 +136,7 @@ public class LavaAssistantClient implements ClientModInitializer {
             case 25 -> {
                 setSelectedSlot(mc.player.getInventory(), originalSlot);
                 state = 3;
-                delayTicks = 6; // Fast optimal wait for lava damage
+                delayTicks = 6; // Optimal wait for lava damage
             }
             case 3 -> {
                 if (targetPos != null) {
@@ -177,6 +177,7 @@ public class LavaAssistantClient implements ClientModInitializer {
         return null;
     }
 
+    // ORIGINAL UNTOUCHED ACCURATE PREDICTION
     private BlockPos predictLandingPos(MinecraftClient mc, PlayerEntity player) {
         Vec3d pos = player.getEntityPos();
         Vec3d velocity = player.getVelocity();
@@ -203,6 +204,7 @@ public class LavaAssistantClient implements ClientModInitializer {
         return new BlockPos((int) Math.floor(pos.x), (int) Math.floor(pos.y), (int) Math.floor(pos.z));
     }
 
+    // ORIGINAL UNTOUCHED ACCURATE VALIDATION
     private boolean isValidPlacement(MinecraftClient mc, PlayerEntity player, BlockPos pos) {
         BlockPos below = pos.down();
         if (!mc.world.getBlockState(below).isSolidBlock(mc.world, below))
@@ -259,19 +261,8 @@ public class LavaAssistantClient implements ClientModInitializer {
         float targetYaw = (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
         float targetPitch = (float) (-Math.toDegrees(Math.atan2(delta.y, horizontal)));
 
-        // 1. Temporarily set client angles so interaction raycast succeeds without visual delay
-        mc.player.setYaw(targetYaw);
-        mc.player.setPitch(targetPitch);
-
-        // 2. Send rotation packet to server
         mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
-
-        // 3. Execute action (place / pickup)
         action.run();
-
-        // 4. Instantly restore real angles in the same tick so screen never jerks/shakes
-        mc.player.setYaw(realYaw);
-        mc.player.setPitch(realPitch);
         mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(realYaw, realPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
 
         return true;
